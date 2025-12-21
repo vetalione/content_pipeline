@@ -1,0 +1,82 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Article {
+  id            String        @id @default(uuid())
+  celebrityName String
+  status        String        @default("draft")
+  currentStage  String        @default("input")
+  // language for generated content: 'ru' | 'en' | 'both'
+  language      String        @default("ru")
+  createdAt     DateTime      @default(now())
+  updatedAt     DateTime      @updatedAt
+  
+  // Research data (JSON)
+  researchData  Json?
+  
+  // Content (JSON)
+  content       Json?
+  
+  // Cover
+  coverImage    CoverImage?
+  
+  // Publications
+  publications  Publication[]
+  
+  @@index([status])
+  @@index([currentStage])
+  @@index([createdAt])
+}
+
+model CoverImage {
+  id                 String   @id @default(uuid())
+  articleId          String   @unique
+  article            Article  @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  originalImageUrl   String
+  processedImageUrl  String?
+  localPath          String
+  template           String
+  generatedAt        DateTime @default(now())
+}
+
+model Publication {
+  id           String    @id @default(uuid())
+  articleId    String
+  article      Article   @relation(fields: [articleId], references: [id], onDelete: Cascade)
+  platform     String
+  status       String    @default("pending")
+  publishedUrl String?
+  publishedAt  DateTime?
+  error        String?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  
+  @@index([articleId])
+  @@index([platform])
+  @@index([status])
+}
+
+model StyleTemplate {
+  id          String   @id @default(uuid())
+  name        String   @unique
+  description String?
+  config      Json
+  isDefault   Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ApiKey {
+  id        String   @id @default(uuid())
+  service   String   @unique
+  key       String
+  isActive  Boolean  @default(true)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}

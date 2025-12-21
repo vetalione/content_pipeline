@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Testing
+coverage/
+
+# Production
+dist/
+build/
+
+# Environment variables
+.env
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+lerna-debug.log*
+*.log
+
+# Editor directories
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Database
+*.db
+*.sqlite
+prisma/migrations/
+
+# Media cache
+temp/
+cache/
+uploads/
+
+# Redis dump
+dump.rdb
+
+# Playwright sessions (contains auth tokens)
+packages/api/src/services/publishers/sessions/
+test-results/
+playwright-report/
+playwright/.cache/

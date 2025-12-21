@@ -1,0 +1,15 @@
+[phases.setup]
+nixPkgs = ["nodejs_20", "openssl", "playwright-driver", "chromium"]
+
+[phases.install]
+cmds = ["npm install --ignore-scripts --legacy-peer-deps", "npx playwright install chromium --with-deps"]
+
+[phases.build]
+cmds = [
+  "npm run build --workspace=packages/shared",
+  "npm run build --workspace=packages/api", 
+  "npm run build --workspace=packages/web"
+]
+
+[start]
+cmd = "npm run start --workspace=packages/api"
