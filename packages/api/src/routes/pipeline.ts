@@ -74,16 +74,20 @@ pipelineRouter.get('/:articleId/status', async (req, res, next) => {
     const jobs = await researchQueue.getJobs(['active', 'waiting', 'completed', 'failed']);
     const articleJobs = jobs.filter(job => job.data.articleId === articleId);
     
+    const jobsWithState = await Promise.all(
+      articleJobs.map(async (job) => ({
+        id: job.id,
+        stage: job.data.stage,
+        state: await job.getState(),
+        progress: job.progress,
+        timestamp: job.timestamp
+      }))
+    );
+    
     res.json({
       success: true,
       data: {
-        jobs: articleJobs.map(job => ({
-          id: job.id,
-          stage: job.data.stage,
-          state: await job.getState(),
-          progress: job.progress,
-          timestamp: job.timestamp
-        }))
+        jobs: jobsWithState
       }
     });
   } catch (error) {

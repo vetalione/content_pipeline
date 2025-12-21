@@ -26,6 +26,7 @@
     "axios": "^1.6.3",
     "sharp": "^0.33.1",
     "fluent-ffmpeg": "^2.1.2",
+    "playwright": "^1.40.1",
     "telegram": "^2.19.7",
     "vk-io": "^4.7.0",
     "zod": "^3.22.4"

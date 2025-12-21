@@ -31,7 +31,7 @@ export async function publishWithPlaywright(platform: Platform, article: any) {
         return await publishToYouTube(browser, article);
       case Platform.THREADS:
         return await publishToThreads(browser, article);
-      case (Platform as any).DZEN:
+      case Platform.DZEN:
         return await publishToDzen(browser, article);
       default:
         throw new Error(`Platform ${platform} not implemented in Playwright publisher`);
