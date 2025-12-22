@@ -1,4 +1,4 @@
-import { ArticleContent } from '@content-pipeline/shared';
+import { ArticleContent } from '../types';
 import { Edit } from 'lucide-react';
 
 interface Props {

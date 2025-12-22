@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Plus, Clock, CheckCircle, AlertCircle, Loader } from 'lucide-react';
 import { api } from '../lib/api';
-import type { Article } from '@content-pipeline/shared';
+import type { Article } from '../types';
 
 export default function Dashboard() {
   const [articles, setArticles] = useState<Article[]>([]);

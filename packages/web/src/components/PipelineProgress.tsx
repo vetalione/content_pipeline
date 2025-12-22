@@ -1,4 +1,4 @@
-import { PipelineStage } from '@content-pipeline/shared';
+import { PipelineStage } from '../types';
 import { Check, Loader } from 'lucide-react';
 
 interface Props {

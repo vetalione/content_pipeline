@@ -2,7 +2,7 @@ import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { ArrowLeft, Play } from 'lucide-react';
 import { api } from '../lib/api';
-import { PipelineStage, type Article } from '@content-pipeline/shared';
+import { PipelineStage, type Article } from '../types';
 import PipelineProgress from '../components/PipelineProgress';
 import ResearchView from '../components/ResearchView';
 import ContentView from '../components/ContentView';

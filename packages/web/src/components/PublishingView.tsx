@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Platform, Publication } from '@content-pipeline/shared';
+import { Platform, Publication } from '../types';
 import { Send, CheckCircle, XCircle, Clock } from 'lucide-react';
 import { api } from '../lib/api';
 

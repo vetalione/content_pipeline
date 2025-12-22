@@ -1,4 +1,4 @@
-import { ResearchData } from '@content-pipeline/shared';
+import { ResearchData } from '../types';
 import { ExternalLink } from 'lucide-react';
 
 interface Props {
