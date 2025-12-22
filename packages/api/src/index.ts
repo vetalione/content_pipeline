@@ -10,7 +10,7 @@ import { errorHandler } from './middleware/errorHandler';
 dotenv.config();
 
 const app = express();
-const PORT = process.env.API_PORT || 3001;
+const PORT = Number(process.env.PORT || process.env.API_PORT || 3001);
 
 // Middleware
 const allowedOrigins = process.env.CORS_ORIGIN 
@@ -47,9 +47,11 @@ app.use('/api/config', configRouter);
 app.use(errorHandler);
 
 // Start server
-app.listen(PORT, () => {
-  console.log(`🚀 API server running on http://localhost:${PORT}`);
-  console.log(`📊 Health check: http://localhost:${PORT}/health`);
+const HOST = '0.0.0.0'; // Listen on all interfaces for Railway
+app.listen(PORT, HOST, () => {
+  console.log(`🚀 API server running on port ${PORT}`);
+  console.log(`📊 Health check: /health`);
+  console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
 });
 
 export default app;
