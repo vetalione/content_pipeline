@@ -1,11 +1,16 @@
 import { Queue, Worker } from 'bullmq';
 import Redis from 'ioredis';
 
-const connection = new Redis({
-  host: process.env.REDIS_HOST || 'localhost',
-  port: Number(process.env.REDIS_PORT) || 6379,
-  maxRetriesPerRequest: null
-});
+// Railway provides REDIS_URL, fallback to separate host/port for local dev
+const connection = process.env.REDIS_URL
+  ? new Redis(process.env.REDIS_URL, {
+      maxRetriesPerRequest: null
+    })
+  : new Redis({
+      host: process.env.REDIS_HOST || 'localhost',
+      port: Number(process.env.REDIS_PORT) || 6379,
+      maxRetriesPerRequest: null
+    });
 
 export const researchQueue = new Queue('research', { connection });
 export const generationQueue = new Queue('generation', { connection });
