@@ -92,11 +92,11 @@ export async function performResearch(articleId: string): Promise<ResearchData> 
   const researchData = convertToResearchData(rawData);
   console.log('Converted research data:', JSON.stringify(researchData, null, 2));
   
-  // Save to database
+  // Save to database (cast to JSON for Prisma)
   await prisma.article.update({
     where: { id: articleId },
     data: {
-      researchData,
+      researchData: researchData as any,
       currentStage: PipelineStage.RESEARCH,
       updatedAt: new Date()
     }
