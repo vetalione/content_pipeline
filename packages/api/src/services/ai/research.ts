@@ -29,7 +29,27 @@ export async function performResearch(articleId: string): Promise<ResearchData> 
     messages: [
       {
         role: 'system',
-        content: 'You are an expert biographer and researcher specializing in finding dramatic, tragic, and controversial stories about celebrities. Focus on failures, struggles, and dark periods that preceded success.'
+        content: `Ты эксперт-исследователь, специализирующийся на поиске КОНКРЕТНЫХ драматических фактов о знаменитостях для статей в стиле "Great Losers".
+
+КРИТИЧЕСКИ ВАЖНО - ищи ТОЛЬКО:
+✅ Конкретные неудачи с цифрами, датами, суммами
+✅ Драматические низшие точки карьеры
+✅ Скандалы, провалы, банкротства, зависимости
+✅ Тюрьма, бедность, издевательства, травмы
+✅ Отказы, увольнения, критика
+✅ Контрасты: "был никем → стал звездой"
+
+ОБЯЗАТЕЛЬНО указывай:
+- Точный возраст в момент события
+- Конкретные суммы денег
+- Сколько дней/месяцев/лет длилось
+- Имена людей, мест, компаний
+- Цитаты героя (если есть)
+
+❌ НЕ НУЖНЫ общие фразы типа "столкнулся с трудностями"
+✅ НУЖНЫ детали типа "потерял $500,000", "провёл 113 дней в тюрьме"
+
+Формат ответа: минимум 8-10 драматических фактов-неудач + итоговый успех с цифрами`
       },
       {
         role: 'user',
@@ -58,53 +78,64 @@ export async function performResearch(articleId: string): Promise<ResearchData> 
 
 function createResearchPrompt(celebrityName: string): string {
   return `
-Research ${celebrityName} and provide a comprehensive JSON response with the following structure:
+Исследуй жизнь ${celebrityName} и найди минимум 8-10 КОНКРЕТНЫХ драматических неудач/провалов.
+
+ОБЯЗАТЕЛЬНЫЙ JSON формат:
 
 {
-  "facts": [
+  "failures": [
     {
-      "id": "unique_id",
-      "title": "Short title",
-      "description": "Detailed description of the failure/tragedy/struggle",
-      "category": "failure|tragedy|controversy|struggle|success",
-      "year": 2020,
-      "severity": 1-5,
-      "sources": ["source1", "source2"]
+      "number": 1,
+      "title": "Краткий цепляющий заголовок с деталью",
+      "age": "возраст когда это случилось",
+      "year": "год события",
+      "description": "Детальное описание со всеми цифрами, суммами, сроками",
+      "outcome": "что из этого вышло",
+      "severity": 1-5
     }
   ],
   "quotes": [
     {
-      "id": "unique_id",
-      "text": "Exact quote",
-      "context": "Context of the quote",
-      "source": "Interview name or book title",
-      "year": 2020
+      "text": "Точная цитата героя",
+      "context": "Когда и почему он это сказал",
+      "source": "Откуда цитата"
     }
   ],
-  "images": [
-    {
-      "id": "unique_id",
-      "url": "image_search_query",
-      "description": "Description of the image",
-      "source": "Where to find it",
-      "isRare": true/false,
-      "year": 2020
-    }
-  ],
-  "sources": ["source1", "source2", "source3"]
+  "success": {
+    "peak_achievement": "Главное достижение с цифрами",
+    "current_status": "Текущий статус",
+    "wealth": "Состояние/гонорары с суммами",
+    "awards": ["список наград"]
+  },
+  "bonus_fact": "Забавный или шокирующий малоизвестный факт",
+  "timeline": "Краткая хронология: от [худшее] в [год] до [лучшее] в [год]",
+  "sources": ["источник1", "источник2"]
 }
 
-Find 8-9 of the most dramatic failures, tragedies, controversies, or struggles. Include:
-- Career failures and rejections
-- Personal tragedies
-- Public controversies
-- Financial problems
-- Health struggles
-- Relationship issues
-- Dark periods before success
+КРИТИЧНО - каждая неудача должна содержать:
+- Точный возраст или год
+- Конкретные цифры (деньги, дни, километры, что угодно)
+- Драматические детали
+- Никаких общих фраз!
 
-Focus on lesser-known, rare facts that aren't widely publicized. Include exact quotes from interviews, autobiographies, and personal letters. Suggest rare photo opportunities.
+Примеры ХОРОШИХ заголовков:
+✅ "В 17 лет работал живой статуей"
+✅ "Провёл 113 дней в настоящей тюрьме"
+✅ "Потерял дом и машину, оказался в долгах"
 
-The story should have a redemption arc - show how they eventually succeeded despite everything.
+Примеры ПЛОХИХ заголовков:
+❌ "Испытал финансовые трудности"
+❌ "Столкнулся с проблемами"
+❌ "Пережил сложный период"
+
+Фокусируйся на:
+- Зависимости, банкротства, тюрьма
+- Отказы, увольнения, провальные проекты
+- Травмы, болезни, потери близких
+- Скандалы, судебные дела
+- Бедность, долги, бездомность
+
+История должна иметь хэппи-энд с конкретными цифрами успеха!
 `;
 }
+
