@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { publishToTelegram } from '../services/publishers/telegram';
 import { publishToVK } from '../services/publishers/vk';
+import publishWithPlaywright from '../services/publishers/playwright';
 import { Platform } from '@content-pipeline/shared';
 import { prisma } from '../lib/db';
 
@@ -49,7 +50,18 @@ publishingRouter.post('/:articleId/publish', async (req, res, next) => {
             case Platform.VK:
               result = await publishToVK(article);
               break;
-            // Add other platforms...
+            case Platform.DZEN:
+              result = await publishWithPlaywright(Platform.DZEN, article);
+              break;
+            case Platform.INSTAGRAM:
+            case Platform.YOUTUBE:
+            case Platform.THREADS:
+            case Platform.MEDIUM:
+            case Platform.FACEBOOK:
+            case Platform.TWITTER:
+            case Platform.LINKEDIN:
+              result = await publishWithPlaywright(pub.platform as Platform, article);
+              break;
             default:
               throw new Error(`Platform ${pub.platform} not implemented`);
           }
