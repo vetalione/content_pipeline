@@ -18,46 +18,86 @@ export const coverQueue = new Queue('cover', { connection });
 export const publishQueue = new Queue('publish', { connection });
 
 // Research Worker
-new Worker('research', async (job) => {
+const researchWorker = new Worker('research', async (job) => {
   const { articleId } = job.data;
   console.log(`Starting research for article ${articleId}`);
   
-  // Import research service
-  const { performResearch } = await import('./ai/research');
-  const result = await performResearch(articleId);
-  
-  return result;
+  try {
+    // Import research service
+    const { performResearch } = await import('./ai/research');
+    const result = await performResearch(articleId);
+    
+    console.log(`Research completed for article ${articleId}`);
+    return result;
+  } catch (error) {
+    console.error(`Research failed for article ${articleId}:`, error);
+    throw error;
+  }
 }, { connection });
 
+researchWorker.on('failed', (job, err) => {
+  console.error(`Research job ${job?.id} failed:`, err);
+});
+
 // Generation Worker
-new Worker('generation', async (job) => {
+const generationWorker = new Worker('generation', async (job) => {
   const { articleId, styleConfig } = job.data;
   console.log(`Starting content generation for article ${articleId}`);
   
-  const { generateContent } = await import('./ai/generator');
-  const result = await generateContent(articleId, styleConfig);
-  
-  return result;
+  try {
+    const { generateContent } = await import('./ai/generator');
+    const result = await generateContent(articleId, styleConfig);
+    
+    console.log(`Generation completed for article ${articleId}`);
+    return result;
+  } catch (error) {
+    console.error(`Generation failed for article ${articleId}:`, error);
+    throw error;
+  }
 }, { connection });
 
+generationWorker.on('failed', (job, err) => {
+  console.error(`Generation job ${job?.id} failed:`, err);
+});
+
 // Cover Worker
-new Worker('cover', async (job) => {
+const coverWorker = new Worker('cover', async (job) => {
   const { articleId, template } = job.data;
   console.log(`Starting cover generation for article ${articleId}`);
   
-  const { generateCover } = await import('./media/cover');
-  const result = await generateCover(articleId, template);
-  
-  return result;
+  try {
+    const { generateCover } = await import('./media/cover');
+    const result = await generateCover(articleId, template);
+    
+    console.log(`Cover generated for article ${articleId}`);
+    return result;
+  } catch (error) {
+    console.error(`Cover generation failed for article ${articleId}:`, error);
+    throw error;
+  }
 }, { connection });
 
+coverWorker.on('failed', (job, err) => {
+  console.error(`Cover job ${job?.id} failed:`, err);
+});
+
 // Publish Worker
-new Worker('publish', async (job) => {
+const publishWorker = new Worker('publish', async (job) => {
   const { articleId, platform } = job.data;
   console.log(`Publishing article ${articleId} to ${platform}`);
   
-  const { publishArticle } = await import('./publishers');
-  const result = await publishArticle(articleId, platform);
-  
-  return result;
+  try {
+    const { publishArticle } = await import('./publishers');
+    const result = await publishArticle(articleId, platform);
+    
+    console.log(`Published article ${articleId} to ${platform}`);
+    return result;
+  } catch (error) {
+    console.error(`Publishing failed for article ${articleId} to ${platform}:`, error);
+    throw error;
+  }
 }, { connection });
+
+publishWorker.on('failed', (job, err) => {
+  console.error(`Publish job ${job?.id} failed:`, err);
+});
