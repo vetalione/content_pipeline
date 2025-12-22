@@ -85,7 +85,12 @@ export async function performResearch(articleId: string): Promise<ResearchData> 
     throw new Error(`Research failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
   
-  const researchData = JSON.parse(completion.choices[0].message.content || '{}');
+  const rawData = JSON.parse(completion.choices[0].message.content || '{}');
+  console.log('Raw OpenAI data:', JSON.stringify(rawData, null, 2));
+  
+  // Convert new format to old format expected by frontend
+  const researchData = convertToResearchData(rawData);
+  console.log('Converted research data:', JSON.stringify(researchData, null, 2));
   
   // Save to database
   await prisma.article.update({
@@ -179,3 +184,44 @@ function createResearchPrompt(celebrityName: string): string {
 `;
 }
 
+/**
+ * Convert new OpenAI format to old ResearchData format expected by frontend
+ */
+function convertToResearchData(rawData: any): ResearchData {
+  const facts: BiographyFact[] = [];
+  
+  // Convert failures array to facts
+  if (rawData.failures && Array.isArray(rawData.failures)) {
+    rawData.failures.forEach((failure: any, index: number) => {
+      facts.push({
+        id: `fact-${index + 1}`,
+        title: failure.title || `Неудача ${failure.number || index + 1}`,
+        description: `${failure.description || ''}\n${failure.outcome || ''}`.trim(),
+        category: 'failure',
+        year: failure.year ? parseInt(failure.year) : undefined,
+        severity: failure.severity || 3,
+        sources: []
+      });
+    });
+  }
+  
+  // Convert quotes array
+  const quotes = (rawData.quotes || []).map((quote: any, index: number) => ({
+    id: `quote-${index + 1}`,
+    text: quote.text || '',
+    context: quote.context || '',
+    source: quote.source || 'Неизвестный источник',
+    year: quote.year ? parseInt(quote.year) : undefined
+  }));
+  
+  // Convert sources
+  const sources = rawData.sources || [];
+  
+  return {
+    facts,
+    quotes,
+    images: [], // Will be populated by cover generation
+    sources,
+    generatedAt: new Date()
+  };
+}
