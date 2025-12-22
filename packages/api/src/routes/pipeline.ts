@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { researchQueue } from '../services/queue';
+import { researchQueue, generationQueue, coverQueue } from '../services/queue';
 import { PipelineStage } from '@content-pipeline/shared';
 
 export const pipelineRouter = Router();
@@ -29,7 +29,7 @@ pipelineRouter.post('/:articleId/generate', async (req, res, next) => {
     const { articleId } = req.params;
     const { styleConfig } = req.body;
     
-    await researchQueue.add('generate', {
+    await generationQueue.add('generate', {
       articleId,
       stage: PipelineStage.GENERATION,
       styleConfig
@@ -50,7 +50,7 @@ pipelineRouter.post('/:articleId/cover', async (req, res, next) => {
     const { articleId } = req.params;
     const { template } = req.body;
     
-    await researchQueue.add('cover', {
+    await coverQueue.add('cover', {
       articleId,
       stage: PipelineStage.COVER,
       template
