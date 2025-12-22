@@ -31,7 +31,7 @@ export async function performResearch(articleId: string): Promise<ResearchData> 
   try {
     completion = await Promise.race([
       openai.chat.completions.create({
-        model: 'gpt-4-turbo-preview',
+        model: 'gpt-4o',
         messages: [
           {
             role: 'system',
@@ -71,7 +71,7 @@ export async function performResearch(articleId: string): Promise<ResearchData> 
           }
         ],
         temperature: 0.7,
-        max_tokens: 6000,
+        max_tokens: 16000,
         response_format: { type: 'json_object' }
       }),
       new Promise<never>((_, reject) => 

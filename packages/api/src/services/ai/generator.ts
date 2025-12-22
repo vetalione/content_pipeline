@@ -30,7 +30,7 @@ export async function generateContent(
   const prompt = createGenerationPrompt(article.celebrityName, article.researchData, styleConfig);
   
   const completion = await openai.chat.completions.create({
-    model: 'gpt-4-turbo-preview',
+    model: 'gpt-4o',
     messages: [
       {
         role: 'system',
@@ -140,7 +140,7 @@ export async function generateContent(
       }
     ],
     temperature: 0.8,
-    max_tokens: 4000,
+    max_tokens: 16000,
     response_format: { type: 'json_object' }
   });
   
