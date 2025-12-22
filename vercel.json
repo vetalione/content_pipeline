@@ -1,0 +1,7 @@
+{
+  "buildCommand": "npm run build --workspace=packages/shared && npm run build --workspace=packages/web",
+  "outputDirectory": "packages/web/dist",
+  "installCommand": "npm install",
+  "framework": null,
+  "devCommand": null
+}

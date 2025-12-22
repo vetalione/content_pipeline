@@ -10,7 +10,7 @@
     "dev:web": "npm run dev --workspace=packages/web",
     "dev:api": "npm run dev --workspace=packages/api",
     "build": "npm run build --workspaces",
-    "build:web": "npm run build --workspace=packages/web",
+    "build:web": "npm run build --workspace=packages/shared && npm run build --workspace=packages/web",
     "build:api": "npm run build --workspace=packages/api",
     "db:migrate": "npm run db:migrate --workspace=packages/api",
     "db:studio": "npm run db:studio --workspace=packages/api",
