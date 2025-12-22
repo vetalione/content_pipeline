@@ -23,13 +23,16 @@ export async function performResearch(articleId: string): Promise<ResearchData> 
   // Create research prompt
   const prompt = createResearchPrompt(article.celebrityName);
   
-  // Call OpenAI
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4-turbo-preview',
-    messages: [
-      {
-        role: 'system',
-        content: `Ты эксперт-исследователь, специализирующийся на поиске КОНКРЕТНЫХ драматических фактов о знаменитостях для статей в стиле "Great Losers" (канал на Дзен).
+  // Call OpenAI with timeout
+  console.log('Calling OpenAI API for research...');
+  
+  const completion = await Promise.race([
+    openai.chat.completions.create({
+      model: 'gpt-4-turbo-preview',
+      messages: [
+        {
+          role: 'system',
+          content: `Ты эксперт-исследователь, специализирующийся на поиске КОНКРЕТНЫХ драматических фактов о знаменитостях для статей в стиле "Great Losers" (канал на Дзен).
 
 ЦЕЛЬ ИССЛЕДОВАНИЯ:
 Собрать материал для статьи формата "[N] неудач [ИМЯ]". Читатель знает героя как успешную личность, но мы покажем скрытый путь через провалы.
@@ -58,16 +61,22 @@ export async function performResearch(articleId: string): Promise<ResearchData> 
 ✅ НУЖНЫ детали типа "потерял $500,000", "провёл 113 дней в тюрьме", "в 14 лет работал разносчиком газет"
 
 Формат ответа: минимум 8-10 драматических фактов-неудач В ХРОНОЛОГИЧЕСКОМ ПОРЯДКЕ + итоговый успех с цифрами`
-      },
-      {
-        role: 'user',
-        content: prompt
-      }
-    ],
-    temperature: 0.7,
-    max_tokens: 4000,
-    response_format: { type: 'json_object' }
-  });
+        },
+        {
+          role: 'user',
+          content: prompt
+        }
+      ],
+      temperature: 0.7,
+      max_tokens: 6000,
+      response_format: { type: 'json_object' }
+    }),
+    new Promise((_, reject) => 
+      setTimeout(() => reject(new Error('OpenAI API timeout after 3 minutes')), 180000)
+    )
+  ]) as OpenAI.Chat.Completions.ChatCompletion;
+  
+  console.log('OpenAI response received, parsing JSON...');
   
   const researchData = JSON.parse(completion.choices[0].message.content || '{}');
   
