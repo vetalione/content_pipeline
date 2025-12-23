@@ -48,9 +48,15 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
           ],
           temperature: 0.2, // Lower for factual accuracy
           max_tokens: 16000,
-          search_domain_filter: [], // Search entire web
+          search_domain_filter: [
+            'archive.org',
+            'books.google.com',
+            'newspapers.com',
+            'wikipedia.org',
+            'britannica.com'
+          ], // Focus on archival sources
           return_citations: true, // Get source URLs
-          search_recency_filter: 'month' // Include recent sources
+          search_recency_filter: null // No recency filter for historical research
         })
       }),
       new Promise<never>((_, reject) => 
