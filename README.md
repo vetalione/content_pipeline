@@ -73,7 +73,8 @@ content-pipeline/
 - FFmpeg (video generation)
 
 ### AI & APIs
-- OpenAI GPT-4
+- **Perplexity AI** (sonar-pro) - глубокий веб-поиск с цитатами
+- OpenAI GPT-4o
 - Anthropic Claude (опционально)
 - Google Gemini (опционально)
 - ElevenLabs TTS (для озвучки)
@@ -156,6 +157,7 @@ REDIS_PORT=6379
 
 # AI Services (получить на сайтах)
 OPENAI_API_KEY="sk-..."                    # https://platform.openai.com/api-keys
+PERPLEXITY_API_KEY="pplx-..."              # https://www.perplexity.ai/settings/api (РЕКОМЕНДУЕТСЯ для глубокого research)
 ANTHROPIC_API_KEY="sk-ant-..."             # https://console.anthropic.com/
 GOOGLE_GEMINI_API_KEY="..."                # https://makersuite.google.com/app/apikey
 

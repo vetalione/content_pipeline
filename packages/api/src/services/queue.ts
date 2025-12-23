@@ -17,18 +17,28 @@ export const generationQueue = new Queue('generation', { connection });
 export const coverQueue = new Queue('cover', { connection });
 export const publishQueue = new Queue('publish', { connection });
 
-// Research Worker
+// Research Worker - using Perplexity for deep web search
 const researchWorker = new Worker('research', async (job) => {
   const { articleId } = job.data;
-  console.log(`Starting research for article ${articleId}`);
+  console.log(`Starting deep research for article ${articleId} with Perplexity`);
   
   try {
-    // Import research service
-    const { performResearch } = await import('./ai/research');
-    const result = await performResearch(articleId);
+    // Use Perplexity for web-enabled research, fallback to OpenAI
+    const usePerplexity = !!process.env.PERPLEXITY_API_KEY;
     
-    console.log(`Research completed for article ${articleId}`);
-    return result;
+    if (usePerplexity) {
+      console.log('Using Perplexity AI with web search');
+      const { performPerplexityResearch } = await import('./ai/perplexity-research');
+      const result = await performPerplexityResearch(articleId);
+      console.log(`Perplexity research completed for article ${articleId}`);
+      return result;
+    } else {
+      console.log('Perplexity not configured, using OpenAI (no web search)');
+      const { performResearch } = await import('./ai/research');
+      const result = await performResearch(articleId);
+      console.log(`OpenAI research completed for article ${articleId}`);
+      return result;
+    }
   } catch (error) {
     console.error(`Research failed for article ${articleId}:`, error);
     throw error;
