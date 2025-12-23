@@ -63,10 +63,10 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
       throw new Error(`Perplexity API error: ${response.status} - ${errorText}`);
     }
     
-    const data = await response.json();
+    const data: any = await response.json();
     console.log('Perplexity response received:', JSON.stringify(data, null, 2));
     
-    const content = data.choices[0].message.content;
+    const content = data.choices?.[0]?.message?.content || '';
     const citations = data.citations || [];
     
     console.log('Citations found:', citations.length);
