@@ -78,7 +78,15 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
     console.log('Citations found:', citations.length);
     
     // Parse JSON from response
-    const rawData = extractJSON(content);
+    let rawData;
+    try {
+      rawData = extractJSON(content);
+    } catch (parseError) {
+      console.error('Failed to parse Perplexity JSON, using OpenAI to fix...');
+      
+      // Fallback: use OpenAI to convert messy text to clean JSON
+      rawData = await fixJSONWithOpenAI(content, article.celebrityName);
+    }
     
     // Convert to ResearchData format
     const researchData = convertToResearchData(rawData, citations);
@@ -314,6 +322,53 @@ function extractJSON(content: string): any {
       throw new Error('Invalid JSON response from Perplexity');
     }
   }
+}
+
+/**
+ * Fix broken JSON using OpenAI
+ */
+async function fixJSONWithOpenAI(brokenJSON: string, celebrityName: string): Promise<any> {
+  console.log('Using OpenAI to fix malformed JSON...');
+  
+  if (!process.env.OPENAI_API_KEY) {
+    throw new Error('OPENAI_API_KEY not configured for JSON fixing');
+  }
+  
+  const OpenAI = (await import('openai')).default;
+  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+  
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o',
+    messages: [
+      {
+        role: 'system',
+        content: 'You are a JSON repair specialist. Extract research data from malformed JSON and return valid JSON matching the expected structure.'
+      },
+      {
+        role: 'user',
+        content: `Fix this broken JSON about ${celebrityName} and return valid JSON with structure:
+{
+  "teaser": {"known_for": "...", "hidden_drama": "...", "childhood_photo_hint": "..."},
+  "failures": [{"number": 1, "title": "...", "age": "...", "year": "...", "description": "...", "outcome": "...", "severity": 1-5, "source": "...", "visual_suggestion": "..."}],
+  "quotes": [{"text": "...", "context": "...", "source": "...", "page_or_timestamp": "...", "suitable_for_ending": true/false}],
+  "success": {"peak_achievement": "...", "current_status": "...", "wealth": "...", "awards": [], "personal_life": "..."},
+  "rare_sources": [{"type": "...", "title": "...", "author": "...", "year": "...", "url": "...", "key_facts": "..."}],
+  "bonus_fact": "...",
+  "timeline": "...",
+  "sources": []
+}
+
+Broken JSON:
+${brokenJSON.substring(0, 15000)}`
+      }
+    ],
+    response_format: { type: 'json_object' },
+    temperature: 0.1
+  });
+  
+  const fixed = JSON.parse(completion.choices[0].message.content || '{}');
+  console.log('OpenAI successfully fixed JSON');
+  return fixed;
 }
 
 /**
