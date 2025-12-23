@@ -250,6 +250,13 @@ function createDeepResearchPrompt(celebrityName: string): string {
 - Хронология от детства (5-7 лет) к настоящему
 - Редкие детали, о которых мало кто знает
 
+⚠️ КРИТИЧНО: Выдавай СТРОГО ВАЛИДНЫЙ JSON:
+- БЕЗ дублирующихся ключей
+- БЕЗ trailing commas (запятая перед })
+- Проверь синтаксис перед отправкой
+- Только JSON, никакого текста до или после
+- Используй двойные кавычки для строк
+
 Выдавай только валидный JSON без дополнительного текста.`;
 }
 
@@ -257,20 +264,49 @@ function createDeepResearchPrompt(celebrityName: string): string {
  * Extract JSON from response (handles markdown code blocks)
  */
 function extractJSON(content: string): any {
+  console.log('Raw content length:', content.length);
+  
   // Remove markdown code blocks if present
   let jsonStr = content.trim();
   
+  // Handle various markdown formats
   if (jsonStr.startsWith('```json')) {
-    jsonStr = jsonStr.replace(/^```json\n/, '').replace(/\n```$/, '');
+    jsonStr = jsonStr.replace(/^```json\s*\n?/, '').replace(/\n?```\s*$/, '');
   } else if (jsonStr.startsWith('```')) {
-    jsonStr = jsonStr.replace(/^```\n/, '').replace(/\n```$/, '');
+    jsonStr = jsonStr.replace(/^```\s*\n?/, '').replace(/\n?```\s*$/, '');
+  }
+  
+  // Try to find JSON object if wrapped in text
+  const jsonMatch = jsonStr.match(/\{[\s\S]*\}/);
+  if (jsonMatch) {
+    jsonStr = jsonMatch[0];
   }
   
   try {
-    return JSON.parse(jsonStr);
+    const parsed = JSON.parse(jsonStr);
+    console.log('Successfully parsed JSON');
+    return parsed;
   } catch (error) {
-    console.error('Failed to parse JSON:', jsonStr);
-    throw new Error('Invalid JSON response from Perplexity');
+    console.error('JSON parse error:', error);
+    console.error('Failed JSON string (first 1000 chars):', jsonStr.substring(0, 1000));
+    
+    // Try to fix common JSON errors
+    try {
+      // Remove trailing commas before closing braces/brackets
+      let fixed = jsonStr
+        .replace(/,\s*}/g, '}')
+        .replace(/,\s*]/g, ']')
+        // Fix duplicate keys by keeping only first occurrence
+        .replace(/("[\w_]+"\s*:\s*[^,}]+),\s*\1/g, '$1');
+      
+      console.log('Attempting to parse fixed JSON...');
+      const parsed = JSON.parse(fixed);
+      console.log('Successfully parsed fixed JSON');
+      return parsed;
+    } catch (fixError) {
+      console.error('Could not fix JSON:', fixError);
+      throw new Error('Invalid JSON response from Perplexity');
+    }
   }
 }
 
