@@ -410,10 +410,41 @@ function convertToResearchData(rawData: any, citations: string[]): ResearchData 
   // Deduplicate sources
   const uniqueSources = Array.from(new Set(allSources));
   
+  // Extract image hints from failures and teaser
+  const images: any[] = [];
+  
+  // Add childhood photo hint from teaser
+  if (rawData.teaser?.childhood_photo_hint) {
+    images.push({
+      id: 'img-childhood',
+      url: '', // To be filled by image search later
+      description: rawData.teaser.childhood_photo_hint,
+      source: 'Childhood photo',
+      isRare: true,
+      year: undefined
+    });
+  }
+  
+  // Add visual suggestions from failures
+  if (rawData.failures && Array.isArray(rawData.failures)) {
+    rawData.failures.forEach((failure: any, index: number) => {
+      if (failure.visual_suggestion) {
+        images.push({
+          id: `img-failure-${index + 1}`,
+          url: '', // To be filled by image search later
+          description: failure.visual_suggestion,
+          source: failure.title || `Failure ${index + 1}`,
+          isRare: true,
+          year: failure.year ? parseInt(failure.year) : undefined
+        });
+      }
+    });
+  }
+  
   return {
     facts,
     quotes,
-    images: [], // Will be populated by cover generation
+    images, // Image hints for later search
     sources: uniqueSources,
     generatedAt: new Date()
   };
