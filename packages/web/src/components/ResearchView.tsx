@@ -28,16 +28,23 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
   // Connect to Socket.IO
   useEffect(() => {
     const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+    console.log('🔌 Connecting to Socket.IO at:', API_URL);
+    
     const newSocket = io(API_URL, {
       transports: ['websocket', 'polling'],
+      reconnection: true,
     });
 
     newSocket.on('connect', () => {
-      console.log('✅ Connected to Socket.IO');
+      console.log('✅ Connected to Socket.IO, socket ID:', newSocket.id);
+    });
+
+    newSocket.on('connect_error', (error) => {
+      console.error('❌ Socket.IO connection error:', error);
     });
 
     newSocket.on(`research:progress:${articleId}`, (prog: ResearchProgress) => {
-      console.log('📡 Research progress:', prog);
+      console.log('📡 Research progress received:', prog);
       setProgress(prog);
     });
 
@@ -119,13 +126,41 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
   const handleResearchControl = async (action: 'stop' | 'restart' | 'deep_dive') => {
     try {
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-      await fetch(`${API_URL}/api/pipeline/research`, {
+      console.log(`🎮 Research control action: ${action}`);
+      
+      if (action === 'deep_dive') {
+        // Start progress for deep dive
+        setProgress({
+          status: 'searching',
+          currentFact: 0,
+          totalFacts: 20,
+          percentage: 5,
+          message: 'Углубленное исследование: поиск дополнительных фактов...',
+          startedAt: new Date().toISOString(),
+        });
+      }
+      
+      const response = await fetch(`${API_URL}/api/pipeline/${articleId}/research`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ articleId, action }),
+        body: JSON.stringify({ action }),
       });
+      
+      const result = await response.json();
+      console.log('Research control result:', result);
+      
+      if (!response.ok) {
+        throw new Error(result.error || 'Failed to control research');
+      }
     } catch (error) {
       console.error('Research control error:', error);
+      setProgress({
+        status: 'failed',
+        currentFact: 0,
+        totalFacts: 0,
+        percentage: 0,
+        message: `Ошибка: ${error instanceof Error ? error.message : 'Unknown error'}`,
+      });
     }
   };
 

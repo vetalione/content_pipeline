@@ -19,8 +19,8 @@ export const publishQueue = new Queue('publish', { connection });
 
 // Research Worker - using Perplexity for deep web search
 const researchWorker = new Worker('research', async (job) => {
-  const { articleId } = job.data;
-  console.log(`Starting deep research for article ${articleId} with Perplexity`);
+  const { articleId, mode } = job.data;
+  console.log(`Starting research for article ${articleId}, mode: ${mode || 'normal'}`);
   
   try {
     // Use Perplexity for web-enabled research, fallback to OpenAI
@@ -29,7 +29,7 @@ const researchWorker = new Worker('research', async (job) => {
     if (usePerplexity) {
       console.log('Using Perplexity AI with web search');
       const { performPerplexityResearch } = await import('./ai/perplexity-research');
-      const result = await performPerplexityResearch(articleId);
+      const result = await performPerplexityResearch(articleId, mode);
       console.log(`Perplexity research completed for article ${articleId}`);
       return result;
     } else {

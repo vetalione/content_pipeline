@@ -5,7 +5,10 @@ import { emitResearchProgress, emitResearchComplete, emitResearchError } from '.
 /**
  * Perform deep research using Perplexity AI with web search
  */
-export async function performPerplexityResearch(articleId: string): Promise<ResearchData> {
+export async function performPerplexityResearch(
+  articleId: string,
+  mode: 'normal' | 'deep_dive' | 'restart' = 'normal'
+): Promise<ResearchData> {
   const article = await prisma.article.findUnique({
     where: { id: articleId }
   });
@@ -14,15 +17,25 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
     throw new Error('Article not found');
   }
   
-  console.log(`Deep research for ${article.celebrityName} using Perplexity...`);
+  console.log(`Deep research for ${article.celebrityName} using Perplexity (mode: ${mode})...`);
+  
+  // Get existing facts for deep_dive mode
+  let existingFactsCount = 0;
+  if (mode === 'deep_dive' && article.researchData) {
+    const researchData = article.researchData as any;
+    existingFactsCount = researchData?.facts?.length || 0;
+    console.log(`Deep dive mode: Found ${existingFactsCount} existing facts to extend`);
+  }
   
   // Emit initial progress
   emitResearchProgress(articleId, {
     status: 'searching',
     currentFact: 0,
-    totalFacts: 12,
+    totalFacts: mode === 'deep_dive' ? 20 : 12,
     percentage: 5,
-    message: `Начинаю глубокое исследование: ${article.celebrityName}`,
+    message: mode === 'deep_dive' 
+      ? `Углубленное исследование: ищем дополнительные факты про ${article.celebrityName}`
+      : `Начинаю глубокое исследование: ${article.celebrityName}`,
     startedAt: new Date().toISOString(),
   });
   
@@ -121,8 +134,27 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
     }
     
     // Convert to ResearchData format
-    const researchData = convertToResearchData(rawData, citations);
+    let researchData = convertToResearchData(rawData, citations);
     console.log('Converted research data with', researchData.facts.length, 'facts');
+    
+    // In deep_dive mode, merge with existing facts
+    if (mode === 'deep_dive' && article.researchData) {
+      const existingData = article.researchData as any;
+      const existingFacts = existingData.facts || [];
+      
+      // Merge facts, avoiding duplicates by title
+      const existingTitles = new Set(existingFacts.map((f: BiographyFact) => f.title.toLowerCase()));
+      const newFacts = researchData.facts.filter((f: BiographyFact) => !existingTitles.has(f.title.toLowerCase()));
+      
+      console.log(`Deep dive: Adding ${newFacts.length} new unique facts to existing ${existingFacts.length}`);
+      
+      researchData = {
+        ...researchData,
+        facts: [...existingFacts, ...newFacts],
+        quotes: [...(existingData.quotes || []), ...researchData.quotes],
+        sources: [...new Set([...(existingData.sources || []), ...researchData.sources])],
+      };
+    }
     
     // Update progress - completing
     emitResearchProgress(articleId, {

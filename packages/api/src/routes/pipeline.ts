@@ -8,15 +8,19 @@ export const pipelineRouter = Router();
 pipelineRouter.post('/:articleId/research', async (req, res, next) => {
   try {
     const { articleId } = req.params;
+    const { action } = req.body; // 'start', 'restart', 'deep_dive'
+    
+    console.log(`🎮 Research control for ${articleId}: ${action || 'start'}`);
     
     await researchQueue.add('research', {
       articleId,
-      stage: PipelineStage.RESEARCH
+      stage: PipelineStage.RESEARCH,
+      mode: action === 'deep_dive' ? 'deep_dive' : action === 'restart' ? 'restart' : 'normal',
     });
     
     res.json({
       success: true,
-      message: 'Research job queued'
+      message: `Research job queued (${action || 'start'})`
     });
   } catch (error) {
     next(error);
