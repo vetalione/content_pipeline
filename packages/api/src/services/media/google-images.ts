@@ -187,41 +187,63 @@ export async function findFactImage(
   factYear?: number,
   visualSuggestion?: string
 ): Promise<string | null> {
-  // Transliterate celebrity name to English for better international search
-  const englishName = transliterate(celebrityName);
+  // ===== RUSSIAN QUERY (original language - best for Russian celebrities) =====
+  const ruQueryParts = [celebrityName, 'фото'];
   
-  // Build search query in ENGLISH for wider coverage
-  const queryParts = [englishName, 'photo'];
-  
+  let keywords = '';
   if (visualSuggestion) {
-    // Extract only key search terms, not full description
-    const keywords = extractKeywords(visualSuggestion, celebrityName);
-    // Translate keywords to English
-    const englishKeywords = translateKeywordsToEnglish(keywords);
-    queryParts.push(englishKeywords);
-    console.log(`  📝 Simplified: "${visualSuggestion.substring(0, 60)}..." → "${keywords}" → EN: "${englishKeywords}"`);
+    keywords = extractKeywords(visualSuggestion, celebrityName);
+    ruQueryParts.push(keywords);
   } else {
-    // Transliterate factTitle too
-    queryParts.push(transliterate(factTitle));
+    ruQueryParts.push(factTitle);
   }
   
   if (factYear) {
-    queryParts.push(String(factYear));
+    ruQueryParts.push(String(factYear));
   }
 
-  const query = queryParts.join(' ');
-  console.log(`  🔎 Final query (EN): "${query}"`);  
+  const ruQuery = ruQueryParts.join(' ');
+  console.log(`  🔎 Russian query: "${ruQuery}"`);
   
-  // Get multiple image candidates from Google
-  const candidateUrls = await searchGoogleImages(query, 5);
+  // ===== ENGLISH QUERY (wider international coverage) =====
+  const englishName = transliterate(celebrityName);
+  const enQueryParts = [englishName, 'photo'];
   
-  if (candidateUrls.length === 0) {
+  if (visualSuggestion) {
+    const englishKeywords = translateKeywordsToEnglish(keywords);
+    enQueryParts.push(englishKeywords);
+    console.log(`  📝 Keywords: "${keywords}" → EN: "${englishKeywords}"`);
+  } else {
+    enQueryParts.push(transliterate(factTitle));
+  }
+  
+  if (factYear) {
+    enQueryParts.push(String(factYear));
+  }
+
+  const enQuery = enQueryParts.join(' ');
+  console.log(`  🔎 English query: "${enQuery}"`);
+  
+  // Search BOTH languages in parallel
+  const [ruResults, enResults] = await Promise.all([
+    searchGoogleImages(ruQuery, 3),
+    searchGoogleImages(enQuery, 3)
+  ]);
+  
+  // Combine results: Russian first (priority for Russian celebrities), then English
+  const allCandidates = [...ruResults, ...enResults];
+  // Remove duplicates
+  const uniqueCandidates = [...new Set(allCandidates)];
+  
+  console.log(`  📷 Found: ${ruResults.length} RU + ${enResults.length} EN = ${uniqueCandidates.length} unique`);
+  
+  if (uniqueCandidates.length === 0) {
     return null;
   }
 
   // Use Gemini to validate and pick the best image
   const description = visualSuggestion || factTitle;
-  const bestImage = await findBestImage(candidateUrls, celebrityName, description);
+  const bestImage = await findBestImage(uniqueCandidates, celebrityName, description);
 
   return bestImage;
 }
