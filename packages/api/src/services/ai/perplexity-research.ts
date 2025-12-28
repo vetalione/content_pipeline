@@ -92,6 +92,7 @@ export async function performPerplexityResearch(
             'britannica.com'
           ], // Focus on archival sources
           return_citations: true, // Get source URLs
+          return_images: true, // Request images from Perplexity
           search_recency_filter: null // No recency filter for historical research
         })
       }),
@@ -107,6 +108,13 @@ export async function performPerplexityResearch(
     
     const data: any = await response.json();
     console.log('Perplexity response received:', JSON.stringify(data, null, 2));
+    
+    // Check for images in the response (Perplexity returns them in a separate field)
+    const perplexityImages: string[] = data.images || [];
+    console.log('📸 Perplexity returned images:', perplexityImages.length);
+    if (perplexityImages.length > 0) {
+      console.log('  Images from Perplexity:', perplexityImages.slice(0, 5));
+    }
     
     // Update progress - parsing
     emitResearchProgress(articleId, {
@@ -134,8 +142,8 @@ export async function performPerplexityResearch(
       rawData = await fixJSONWithOpenAI(content, article.celebrityName);
     }
     
-    // Convert to ResearchData format
-    let researchData = convertToResearchData(rawData, citations);
+    // Convert to ResearchData format, passing Perplexity images
+    let researchData = convertToResearchData(rawData, citations, perplexityImages);
     console.log('Converted research data with', researchData.facts.length, 'facts');
     
     // In deep_dive mode, merge with existing facts
@@ -310,6 +318,7 @@ function getSystemPrompt(): string {
 - ХРОНОЛОГИЯ: от детства (5-7 лет) к текущему моменту
 - ПРЯМЫЕ ЦИТАТЫ героя из интервью/книг
 - КОНТЕКСТ: что происходило вокруг, кто был свидетелем
+- 📸 ИЗОБРАЖЕНИЯ: ищи фотографии главного героя для каждого факта
 
 📊 КАЧЕСТВО ИСТОЧНИКА (приоритет):
 1. Автобиография героя, личные дневники
@@ -317,7 +326,11 @@ function getSystemPrompt(): string {
 3. Мемуары близких людей
 4. Видео/аудио интервью (с транскрипцией)
 5. Биографические книги с исследованием
-6. Документальные фильмы с архивными кадрами`;
+6. Документальные фильмы с архивными кадрами
+
+🖼️ ВАЖНО ПРО ИЗОБРАЖЕНИЯ:
+Обязательно ищи фотографии главного героя в разные периоды жизни.
+Нам нужны изображения где виден сам человек, а не абстрактные места.`;
 }
 
 function createDeepResearchPrompt(celebrityName: string): string {
@@ -524,13 +537,19 @@ ${brokenJSON.substring(0, 15000)}`
 
 /**
  * Convert Perplexity format to ResearchData format
+ * @param rawData Parsed JSON from Perplexity content
+ * @param citations Citations array from Perplexity response
+ * @param perplexityImages Images array from Perplexity response (separate field)
  */
-function convertToResearchData(rawData: any, citations: string[]): ResearchData {
+function convertToResearchData(rawData: any, citations: string[], perplexityImages: string[] = []): ResearchData {
   const facts: BiographyFact[] = [];
   
   // Convert failures array to facts
   if (rawData.failures && Array.isArray(rawData.failures)) {
     rawData.failures.forEach((failure: any, index: number) => {
+      // Try to get image from Perplexity images array (distribute across facts)
+      const perplexityImageUrl = perplexityImages[index] || undefined;
+      
       facts.push({
         id: `fact-${index + 1}`,
         title: failure.title || `Неудача ${failure.number || index + 1}`,
@@ -539,11 +558,14 @@ function convertToResearchData(rawData: any, citations: string[]): ResearchData 
         year: failure.year ? parseInt(failure.year) : undefined,
         severity: failure.severity || 3,
         sources: failure.source ? [failure.source] : [],
-        imageUrl: failure.image_url || undefined,
+        // Prefer Perplexity image, fallback to image_url from JSON
+        imageUrl: perplexityImageUrl || failure.image_url || undefined,
         visualSuggestion: failure.visual_suggestion || undefined
       });
     });
   }
+  
+  console.log(`📸 Assigned ${perplexityImages.length} Perplexity images to ${facts.length} facts`);
   
   // Convert quotes array
   const quotes = (rawData.quotes || []).map((quote: any, index: number) => ({

@@ -408,10 +408,30 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
                 </div>
               )}
               
-              {/* Visual suggestion hint if no image URL */}
-              {!fact.imageUrl && fact.visualSuggestion && (
+              {/* Visual suggestion hint if no image URL + Find image button */}
+              {!fact.imageUrl && (
                 <div className="my-3 p-2 bg-amber-50 border-l-2 border-amber-400 rounded">
-                  <p className="text-xs text-amber-800">💡 {fact.visualSuggestion}</p>
+                  {fact.visualSuggestion && (
+                    <p className="text-xs text-amber-800 mb-2">💡 {fact.visualSuggestion}</p>
+                  )}
+                  <button
+                    onClick={() => handleRegenerateImage(fact.id)}
+                    disabled={regeneratingImageId === fact.id}
+                    className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Найти картинку через Google"
+                  >
+                    {regeneratingImageId === fact.id ? (
+                      <>
+                        <Search size={12} className="animate-pulse" />
+                        Ищу картинку...
+                      </>
+                    ) : (
+                      <>
+                        <Search size={12} />
+                        Найти картинку
+                      </>
+                    )}
+                  </button>
                 </div>
               )}
               
