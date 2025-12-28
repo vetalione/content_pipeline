@@ -178,18 +178,36 @@ export async function performPerplexityResearch(
     // Debug: Log image status for each fact
     console.log('📊 Image URLs from Perplexity:');
     researchData.facts.forEach((f: BiographyFact, i: number) => {
-      console.log(`  [${i + 1}] ${f.title}: ${f.imageUrl ? `✅ ${f.imageUrl.substring(0, 80)}...` : '❌ no URL'}`);
+      // Handle case where imageUrl might be an object (from Perplexity API)
+      let imageUrlStr: string | undefined;
+      if (typeof f.imageUrl === 'string') {
+        imageUrlStr = f.imageUrl;
+      } else if (f.imageUrl && typeof f.imageUrl === 'object') {
+        // Perplexity sometimes returns image as object with origin_url
+        const imgObj = f.imageUrl as any;
+        imageUrlStr = imgObj.origin_url || imgObj.url || imgObj.src || undefined;
+        f.imageUrl = imageUrlStr; // Normalize to string
+      }
+      console.log(`  [${i + 1}] ${f.title}: ${imageUrlStr ? `✅ ${imageUrlStr.substring(0, 80)}...` : '❌ no URL'}`);
     });
     
     // Validate Perplexity image URLs - check if they are proper HTTP(S) URLs
     console.log('🔍 Validating Perplexity image URLs...');
     researchData.facts.forEach((f: BiographyFact, i: number) => {
-      if (f.imageUrl) {
+      // Normalize imageUrl if it's an object
+      if (f.imageUrl && typeof f.imageUrl === 'object') {
+        const imgObj = f.imageUrl as any;
+        f.imageUrl = imgObj.origin_url || imgObj.url || imgObj.src || undefined;
+      }
+      
+      if (f.imageUrl && typeof f.imageUrl === 'string') {
         // Check if URL is valid HTTP(S) URL
         if (!f.imageUrl.match(/^https?:\/\/.+\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i)) {
           console.log(`  ❌ Invalid image URL for fact ${i + 1}: ${f.imageUrl}`);
           f.imageUrl = undefined; // Clear invalid URL to trigger Google fallback
         }
+      } else {
+        f.imageUrl = undefined; // Clear non-string values
       }
     });
     
