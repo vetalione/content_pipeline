@@ -71,18 +71,43 @@ export default function ResearchView({ data }: Props) {
       {/* Image Hints */}
       {data.images && data.images.length > 0 && (
         <div>
-          <h3 className="text-lg font-semibold mb-3">📷 Редкие фото для поиска ({data.images.length})</h3>
-          <div className="space-y-3">
+          <h3 className="text-lg font-semibold mb-3">📷 Редкие фото ({data.images.length})</h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
             {data.images.map((image) => (
-              <div key={image.id} className="p-3 bg-amber-50 border-l-4 border-amber-400 rounded">
-                <p className="text-sm font-medium text-amber-900 mb-1">{image.source}</p>
-                <p className="text-xs text-amber-800 break-words">{image.description}</p>
-                {image.year && (
-                  <p className="text-xs text-amber-600 mt-1">Год: {image.year}</p>
+              <div key={image.id} className="border rounded-lg overflow-hidden bg-white shadow-sm">
+                {image.url ? (
+                  // Real image found
+                  <div>
+                    <img 
+                      src={image.url} 
+                      alt={image.description}
+                      className="w-full h-48 object-cover"
+                      onError={(e) => {
+                        // Hide broken images
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                    <div className="p-3">
+                      <p className="text-sm font-medium text-gray-900 mb-1">{image.source}</p>
+                      <p className="text-xs text-gray-600 break-words">{image.description}</p>
+                      {image.year && (
+                        <p className="text-xs text-gray-500 mt-1">Год: {image.year}</p>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  // Just a hint, no actual image yet
+                  <div className="p-3 bg-amber-50">
+                    <p className="text-sm font-medium text-amber-900 mb-1">{image.source}</p>
+                    <p className="text-xs text-amber-800 break-words">{image.description}</p>
+                    {image.year && (
+                      <p className="text-xs text-amber-600 mt-1">Год: {image.year}</p>
+                    )}
+                    <p className="text-xs text-amber-600 mt-2 italic">
+                      💡 Подсказка для поиска
+                    </p>
+                  </div>
                 )}
-                <p className="text-xs text-amber-600 mt-1 italic">
-                  💡 Подсказка для поиска изображений
-                </p>
               </div>
             ))}
           </div>

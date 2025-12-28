@@ -203,7 +203,13 @@ function createDeepResearchPrompt(celebrityName: string): string {
 - ДЕТСТВО: бедность, школа, первая работа (5-16 лет)
 - ЮНОСТЬ: отказы, провалы, безденежье (17-25 лет)
 - КАРЬЕРА: банкротства, увольнения, зависимости (25+ лет)
-- РЕДКИЕ ФОТО: детские, школьные, с первых мест работы
+- РЕДКИЕ ФОТО: найди 5-8 редких фотографий с прямыми ссылками:
+  * Детские фото из школьных альбомов, семейных архивов
+  * Фото с первых мест работы
+  * Газетные вырезки с фото до славы
+  * Фото из музеев, библиотек, университетских коллекций
+  * Ищи на: Wikimedia Commons, archive.org/details/image, музейных сайтах
+  * ОБЯЗАТЕЛЬНО: прямая ссылка на .jpg/.png файл (не страницу!)
 
 📋 ОБЯЗАТЕЛЬНЫЙ JSON формат:
 
@@ -241,7 +247,7 @@ function createDeepResearchPrompt(celebrityName: string): string {
     "wealth": "состояние/доход с конкретными суммами",
     "awards": ["награды с годами"],
     "personal_life": "семья, дети (если публично)"
-  },
+  ],
   "rare_sources": [
     {
       "type": "autobiography|memoir|interview|archive|document",
@@ -250,6 +256,16 @@ function createDeepResearchPrompt(celebrityName: string): string {
       "year": "год публикации",
       "url": "ссылка если есть",
       "key_facts": "какие редкие факты оттуда"
+    }
+  ],
+  "rare_images": [
+    {
+      "description": "что изображено (детство, школа, первая работа и т.д.)",
+      "image_url": "прямая ссылка на изображение (найди через поиск изображений)",
+      "page_url": "страница где размещено изображение",
+      "source": "откуда фото (музей, архив, газета)",
+      "year": "примерный год когда сделано фото",
+      "is_rare": true
     }
   ],
   "bonus_fact": "шокирующий малоизвестный факт с источником",
@@ -413,11 +429,27 @@ function convertToResearchData(rawData: any, citations: string[]): ResearchData 
   // Extract image hints from failures and teaser
   const images: any[] = [];
   
-  // Add childhood photo hint from teaser
+  // First, add images from rare_images array (if Perplexity found actual URLs)
+  if (rawData.rare_images && Array.isArray(rawData.rare_images)) {
+    rawData.rare_images.forEach((img: any, index: number) => {
+      if (img.image_url) {
+        images.push({
+          id: `img-rare-${index + 1}`,
+          url: img.image_url,
+          description: img.description || '',
+          source: img.source || img.page_url || 'Unknown',
+          isRare: img.is_rare !== false,
+          year: img.year ? parseInt(img.year) : undefined
+        });
+      }
+    });
+  }
+  
+  // Add childhood photo hint from teaser (as fallback if no URL found)
   if (rawData.teaser?.childhood_photo_hint) {
     images.push({
       id: 'img-childhood',
-      url: '', // To be filled by image search later
+      url: '', // To be filled by image search later if needed
       description: rawData.teaser.childhood_photo_hint,
       source: 'Childhood photo',
       isRare: true,
@@ -425,13 +457,13 @@ function convertToResearchData(rawData: any, citations: string[]): ResearchData 
     });
   }
   
-  // Add visual suggestions from failures
+  // Add visual suggestions from failures (as fallback hints)
   if (rawData.failures && Array.isArray(rawData.failures)) {
     rawData.failures.forEach((failure: any, index: number) => {
       if (failure.visual_suggestion) {
         images.push({
           id: `img-failure-${index + 1}`,
-          url: '', // To be filled by image search later
+          url: '', // To be filled by image search later if needed
           description: failure.visual_suggestion,
           source: failure.title || `Failure ${index + 1}`,
           isRare: true,
