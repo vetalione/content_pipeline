@@ -84,7 +84,11 @@ export default function ArticleDetail() {
       <div className="space-y-6">
         {/* Research Results */}
         {article.researchData && (
-          <ResearchView data={article.researchData} />
+          <ResearchView 
+            data={article.researchData} 
+            articleId={article.id}
+            onUpdate={loadArticle}
+          />
         )}
 
         {/* Generation Controls */}

@@ -66,6 +66,9 @@ export interface BiographyFact {
   sources: string[];
   imageUrl?: string; // Direct link to image illustrating this fact
   visualSuggestion?: string; // Description of what image to search for
+  isDeleted?: boolean; // User manually deleted this fact
+  isEdited?: boolean; // User manually edited this fact
+  editedAt?: string; // ISO timestamp of last manual edit
 }
 
 export interface Quote {
@@ -219,3 +222,22 @@ export interface StyleConfig {
   includeMemes: boolean;
   language: string;
 }
+
+/**
+ * Research progress tracking
+ */
+export interface ResearchProgress {
+  status: 'idle' | 'searching' | 'parsing' | 'completed' | 'failed' | 'stopped';
+  currentFact: number;
+  totalFacts: number;
+  percentage: number;
+  message?: string;
+  startedAt?: string;
+  estimatedTimeRemaining?: number; // seconds
+}
+
+/**
+ * Research control actions
+ */
+export type ResearchAction = 'start' | 'stop' | 'restart' | 'deep_dive';
+

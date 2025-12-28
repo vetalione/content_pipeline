@@ -1,11 +1,14 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import { createServer } from 'http';
 import { articlesRouter } from './routes/articles';
 import { pipelineRouter } from './routes/pipeline';
 import { publishingRouter } from './routes/publishing';
 import { configRouter } from './routes/config';
+import factsRouter from './routes/facts';
 import { errorHandler } from './middleware/errorHandler';
+import { initializeSocketIO } from './lib/socket';
 
 dotenv.config();
 
@@ -45,6 +48,7 @@ app.get('/health', (req, res) => {
 });
 
 app.use('/api/articles', articlesRouter);
+app.use('/api', factsRouter);
 app.use('/api/pipeline', pipelineRouter);
 app.use('/api/publishing', publishingRouter);
 app.use('/api/config', configRouter);
@@ -52,9 +56,13 @@ app.use('/api/config', configRouter);
 // Error handling
 app.use(errorHandler);
 
+// Create HTTP server and initialize Socket.IO
+const httpServer = createServer(app);
+initializeSocketIO(httpServer);
+
 // Start server
 const HOST = '0.0.0.0'; // Listen on all interfaces for Railway
-app.listen(PORT, HOST, () => {
+httpServer.listen(PORT, HOST, () => {
   console.log(`🚀 API server running on port ${PORT}`);
   console.log(`📊 Health check: /health`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);

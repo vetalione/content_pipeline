@@ -1,5 +1,6 @@
 import { prisma } from '../../lib/db';
 import { PipelineStage, ResearchData, BiographyFact } from '@content-pipeline/shared';
+import { emitResearchProgress, emitResearchComplete, emitResearchError } from '../../lib/socket';
 
 /**
  * Perform deep research using Perplexity AI with web search
@@ -15,7 +16,18 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
   
   console.log(`Deep research for ${article.celebrityName} using Perplexity...`);
   
+  // Emit initial progress
+  emitResearchProgress(articleId, {
+    status: 'searching',
+    currentFact: 0,
+    totalFacts: 12,
+    percentage: 5,
+    message: `Начинаю глубокое исследование: ${article.celebrityName}`,
+    startedAt: new Date().toISOString(),
+  });
+  
   if (!process.env.PERPLEXITY_API_KEY) {
+    emitResearchError(articleId, 'PERPLEXITY_API_KEY not configured');
     throw new Error('PERPLEXITY_API_KEY not configured');
   }
   
@@ -23,6 +35,16 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
   const prompt = createDeepResearchPrompt(article.celebrityName);
   
   console.log('Calling Perplexity API with web search...');
+  
+  // Update progress
+  emitResearchProgress(articleId, {
+    status: 'searching',
+    currentFact: 0,
+    totalFacts: 12,
+    percentage: 15,
+    message: 'Поиск информации в архивах и исторических источниках...',
+    startedAt: new Date().toISOString(),
+  });
   
   let response: Response;
   
@@ -72,6 +94,16 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
     const data: any = await response.json();
     console.log('Perplexity response received:', JSON.stringify(data, null, 2));
     
+    // Update progress - parsing
+    emitResearchProgress(articleId, {
+      status: 'parsing',
+      currentFact: 0,
+      totalFacts: 12,
+      percentage: 60,
+      message: 'Обработка найденных данных...',
+      startedAt: new Date().toISOString(),
+    });
+    
     const content = data.choices?.[0]?.message?.content || '';
     const citations = data.citations || [];
     
@@ -92,6 +124,16 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
     const researchData = convertToResearchData(rawData, citations);
     console.log('Converted research data with', researchData.facts.length, 'facts');
     
+    // Update progress - completing
+    emitResearchProgress(articleId, {
+      status: 'completed',
+      currentFact: researchData.facts.length,
+      totalFacts: researchData.facts.length,
+      percentage: 95,
+      message: `Найдено ${researchData.facts.length} фактов`,
+      startedAt: new Date().toISOString(),
+    });
+    
     // Save to database
     await prisma.article.update({
       where: { id: articleId },
@@ -102,10 +144,22 @@ export async function performPerplexityResearch(articleId: string): Promise<Rese
       }
     });
     
+    // Emit complete
+    emitResearchComplete(articleId, researchData);
+    emitResearchProgress(articleId, {
+      status: 'completed',
+      currentFact: researchData.facts.length,
+      totalFacts: researchData.facts.length,
+      percentage: 100,
+      message: 'Исследование завершено!',
+      startedAt: new Date().toISOString(),
+    });
+    
     return researchData;
     
   } catch (error) {
     console.error('Perplexity research error:', error);
+    emitResearchError(articleId, error instanceof Error ? error.message : 'Unknown error');
     throw new Error(`Research failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
   }
 }

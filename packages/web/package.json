@@ -9,25 +9,26 @@
   },
   "dependencies": {
     "@content-pipeline/shared": "*",
+    "@hookform/resolvers": "^3.3.4",
+    "axios": "^1.6.3",
+    "clsx": "^2.1.0",
+    "lucide-react": "^0.303.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
-    "react-router-dom": "^6.21.1",
-    "axios": "^1.6.3",
-    "zustand": "^4.4.7",
     "react-hook-form": "^7.49.2",
+    "react-router-dom": "^6.21.1",
+    "socket.io-client": "^4.8.3",
     "zod": "^3.22.4",
-    "@hookform/resolvers": "^3.3.4",
-    "lucide-react": "^0.303.0",
-    "clsx": "^2.1.0"
+    "zustand": "^4.4.7"
   },
   "devDependencies": {
     "@types/react": "^18.2.45",
     "@types/react-dom": "^18.2.18",
     "@vitejs/plugin-react": "^4.2.1",
-    "typescript": "^5.3.3",
-    "vite": "^5.0.8",
-    "tailwindcss": "^3.4.0",
     "autoprefixer": "^10.4.16",
-    "postcss": "^8.4.32"
+    "postcss": "^8.4.32",
+    "tailwindcss": "^3.4.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.8"
   }
 }
