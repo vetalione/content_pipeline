@@ -38,8 +38,33 @@ export async function validateImageRelevance(
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-    // Fetch image as base64
-    const imageResponse = await fetch(imageUrl);
+    // Fetch image as base64 with timeout to prevent hanging
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
+    
+    let imageResponse: Response;
+    try {
+      imageResponse = await fetch(imageUrl, { 
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+    } catch (fetchError: any) {
+      clearTimeout(timeoutId);
+      if (fetchError.name === 'AbortError') {
+        console.log(`  ⏰ Image fetch timeout: ${imageUrl.substring(0, 60)}...`);
+      } else {
+        console.log(`  ⚠️ Image fetch error: ${fetchError.message}`);
+      }
+      return {
+        isRelevant: false,
+        confidence: 0,
+        reasoning: 'Image fetch failed or timeout'
+      };
+    }
+    clearTimeout(timeoutId);
+    
     if (!imageResponse.ok) {
       // Image not accessible (403, 404, etc.) - skip validation
       console.log(`  ⚠️ Image not accessible (${imageResponse.status}): ${imageUrl.substring(0, 60)}...`);
@@ -73,7 +98,8 @@ export async function validateImageRelevance(
   "reasoning": "краткое объяснение на русском"
 }`;
 
-    const result = await model.generateContent([
+    // Add timeout for Gemini API call
+    const geminiPromise = model.generateContent([
       {
         inlineData: {
           data: base64Image,
@@ -82,6 +108,13 @@ export async function validateImageRelevance(
       },
       { text: prompt }
     ]);
+
+    // 30 second timeout for Gemini API
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('Gemini API timeout after 30s')), 30000)
+    );
+    
+    const result = await Promise.race([geminiPromise, timeoutPromise]);
 
     const response = result.response.text();
     console.log(`🤖 Gemini validation response:`, response.substring(0, 200));

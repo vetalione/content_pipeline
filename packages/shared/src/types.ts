@@ -90,25 +90,46 @@ export interface ImageReference {
 
 /**
  * Generated article content
+ * Structure matches "Великие Неудачники" article format
  */
 export interface ArticleContent {
   title: string;
-  subtitle: string;
-  intro: string;
+  teaser: string;
   sections: ArticleSection[];
-  conclusion: string;
-  motivation: string;
-  generatedAt: Date;
+  conclusion: {
+    heading: string;
+    text: string;
+  };
+  heroQuote: {
+    text: string;
+    author: string;
+  } | null;
+  bonusFact: string | null;
+  cta: string;
+  brandEnding: string;
+  generatedAt?: Date;
+  
+  // Legacy fields for backwards compatibility
+  subtitle?: string;
+  intro?: string;
+  motivation?: string;
 }
 
 export interface ArticleSection {
-  id: string;
-  order: number;
-  title: string;
-  content: string;
+  number: number;
+  heading: string;
+  paragraph1: string;
+  paragraph2: string;
+  blockquote: string | null;
+  
+  // Legacy fields for backwards compatibility
+  id?: string;
+  order?: number;
+  title?: string;
+  content?: string;
   quote?: Quote;
   memeText?: string;
-  images: ImageReference[];
+  images?: ImageReference[];
 }
 
 /**

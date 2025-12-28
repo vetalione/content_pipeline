@@ -5,6 +5,131 @@
 import { findBestImage } from './gemini-image-validator';
 
 /**
+ * Dictionary of known celebrity name translations (Russian → English)
+ */
+const CELEBRITY_TRANSLATIONS: Record<string, string> = {
+  // Scientists
+  'никола тесла': 'Nikola Tesla',
+  'альберт эйнштейн': 'Albert Einstein',
+  'мария кюри': 'Marie Curie',
+  'стивен хокинг': 'Stephen Hawking',
+  'исаак ньютон': 'Isaac Newton',
+  'чарльз дарвин': 'Charles Darwin',
+  'галилео галилей': 'Galileo Galilei',
+  
+  // Actors
+  'роберт дауни младший': 'Robert Downey Jr',
+  'роберт дауни мл': 'Robert Downey Jr',
+  'уилл смит': 'Will Smith',
+  'чарли чаплин': 'Charlie Chaplin',
+  'чарльз чаплин': 'Charlie Chaplin',
+  'леонардо дикаприо': 'Leonardo DiCaprio',
+  'том хэнкс': 'Tom Hanks',
+  'джонни депп': 'Johnny Depp',
+  'брэд питт': 'Brad Pitt',
+  'анджелина джоли': 'Angelina Jolie',
+  'джим керри': 'Jim Carrey',
+  'арнольд шварценеггер': 'Arnold Schwarzenegger',
+  'сильвестр сталлоне': 'Sylvester Stallone',
+  'мэрилин монро': 'Marilyn Monroe',
+  'одри хепберн': 'Audrey Hepburn',
+  'морган фриман': 'Morgan Freeman',
+  'дензел вашингтон': 'Denzel Washington',
+  'том круз': 'Tom Cruise',
+  'мэл гибсон': 'Mel Gibson',
+  
+  // Musicians
+  'элвис пресли': 'Elvis Presley',
+  'майкл джексон': 'Michael Jackson',
+  'фредди меркьюри': 'Freddie Mercury',
+  'джон леннон': 'John Lennon',
+  'пол маккартни': 'Paul McCartney',
+  'мадонна': 'Madonna',
+  'бритни спирс': 'Britney Spears',
+  'эминем': 'Eminem',
+  'леди гага': 'Lady Gaga',
+  'бейонсе': 'Beyonce',
+  'рианна': 'Rihanna',
+  'тейлор свифт': 'Taylor Swift',
+  
+  // Business/Tech
+  'стив джобс': 'Steve Jobs',
+  'билл гейтс': 'Bill Gates',
+  'илон маск': 'Elon Musk',
+  'марк цукерберг': 'Mark Zuckerberg',
+  'джефф безос': 'Jeff Bezos',
+  'уоррен баффет': 'Warren Buffett',
+  'генри форд': 'Henry Ford',
+  'уолт дисней': 'Walt Disney',
+  
+  // Politicians/Leaders
+  'авраам линкольн': 'Abraham Lincoln',
+  'джон кеннеди': 'John F Kennedy',
+  'барак обама': 'Barack Obama',
+  'дональд трамп': 'Donald Trump',
+  'уинстон черчилль': 'Winston Churchill',
+  'нельсон мандела': 'Nelson Mandela',
+  'махатма ганди': 'Mahatma Gandhi',
+  
+  // Athletes
+  'мухаммед али': 'Muhammad Ali',
+  'майкл джордан': 'Michael Jordan',
+  'криштиану роналду': 'Cristiano Ronaldo',
+  'лионель месси': 'Lionel Messi',
+  'тайгер вудс': 'Tiger Woods',
+  'усейн болт': 'Usain Bolt',
+  
+  // Writers/Artists
+  'лев толстой': 'Leo Tolstoy',
+  'фёдор достоевский': 'Fyodor Dostoevsky',
+  'антон чехов': 'Anton Chekhov',
+  'александр пушкин': 'Alexander Pushkin',
+  'пабло пикассо': 'Pablo Picasso',
+  'винсент ван гог': 'Vincent van Gogh',
+  'леонардо да винчи': 'Leonardo da Vinci',
+  'микеланджело': 'Michelangelo',
+  
+  // TV
+  'опра уинфри': 'Oprah Winfrey',
+  'эллен дедженерес': 'Ellen DeGeneres',
+  
+  // Inventors
+  'братья райт': 'Wright Brothers',
+  'томас эдисон': 'Thomas Edison',
+  'александр белл': 'Alexander Graham Bell',
+};
+
+/**
+ * Translate celebrity name from Russian to English
+ * Uses dictionary first, then falls back to transliteration
+ */
+function translateCelebrityName(name: string): string {
+  const lowerName = name.toLowerCase().trim();
+  
+  // Check dictionary first
+  if (CELEBRITY_TRANSLATIONS[lowerName]) {
+    return CELEBRITY_TRANSLATIONS[lowerName];
+  }
+  
+  // Check partial matches (for variations like "Николы Теслы")
+  for (const [ru, en] of Object.entries(CELEBRITY_TRANSLATIONS)) {
+    // Check if the input contains the key name (for genitive case etc)
+    const ruWords = ru.split(' ');
+    const nameWords = lowerName.split(' ');
+    
+    // Match if first word starts similarly (handles Russian declensions)
+    if (ruWords[0] && nameWords[0] && 
+        (nameWords[0].startsWith(ruWords[0].substring(0, 4)) || 
+         ruWords[0].startsWith(nameWords[0].substring(0, 4)))) {
+      return en;
+    }
+  }
+  
+  // Fallback to transliteration
+  return transliterate(name);
+}
+
+/**
  * Translate Russian name/text to English for better Google search results
  */
 function transliterate(text: string): string {
@@ -21,29 +146,6 @@ function transliterate(text: string): string {
     'Ъ': '', 'Ы': 'Y', 'Ь': '', 'Э': 'E', 'Ю': 'Yu', 'Я': 'Ya'
   };
   return text.split('').map(char => map[char] || char).join('');
-}
-
-/**
- * Translate Russian keywords to English for search
- */
-function translateKeywordsToEnglish(keywords: string): string {
-  const translations: Record<string, string> = {
-    'школа': 'school', 'университет': 'university', 'суд': 'court',
-    'концерт': 'concert', 'сцена': 'stage', 'студия': 'studio',
-    'тюрьма': 'prison', 'детство': 'childhood', 'юность': 'youth',
-    'свадьба': 'wedding', 'развод': 'divorce', 'арест': 'arrest',
-    'интервью': 'interview', 'фото': 'photo', 'год': 'year', 'лет': 'years old',
-    'молодой': 'young', 'старый': 'old', 'первый': 'first', 'последний': 'last',
-    'начало': 'beginning', 'карьера': 'career', 'работа': 'work', 'семья': 'family',
-    'дом': 'home', 'родители': 'parents', 'дети': 'children', 'жена': 'wife',
-    'муж': 'husband', 'рождение': 'birth', 'смерть': 'death'
-  };
-  
-  let result = keywords.toLowerCase();
-  for (const [ru, en] of Object.entries(translations)) {
-    result = result.replace(new RegExp(ru, 'gi'), en);
-  }
-  return result;
 }
 
 interface GoogleImageResult {
@@ -140,41 +242,79 @@ export async function searchGoogleImages(
  */
 function extractKeywords(visualSuggestion: string, celebrityName: string): string {
   // Remove the celebrity name from suggestion (we add it separately)
-  let cleaned = visualSuggestion.replace(new RegExp(celebrityName, 'gi'), '');
+  let cleaned = visualSuggestion
+    .replace(new RegExp(celebrityName, 'gi'), '')
+    .replace(/редкое фото/gi, '')
+    .replace(/фото/gi, '')
+    .replace(/photo/gi, '')
+    .replace(/[«»""]/g, '')
+    .trim();
   
-  // Extract key phrases (keep only important nouns and context)
-  // Remove: detailed descriptions, emotions, clothing details
-  
-  // Take first sentence or clause (before colon or comma)
-  const firstPart = cleaned.split(/[,:]/)[0];
-  
-  // Extract key nouns (age, event, location)
   const keywords: string[] = [];
   
-  // Look for age mentions
-  const ageMatch = firstPart.match(/(\d+[-–—]\d+|^\d+)\s*(лет|год)/i);
-  if (ageMatch) keywords.push(ageMatch[0]);
-  
-  // Look for key event words
-  const eventWords = ['школа', 'университет', 'суд', 'концерт', 'сцена', 'студия', 'тюрьма', 
-                      'детство', 'юность', 'свадьба', 'развод', 'арест', 'интервью'];
-  eventWords.forEach(word => {
-    if (firstPart.toLowerCase().includes(word)) {
-      keywords.push(word);
-    }
-  });
+  // Look for age mentions: "5-10 лет", "около 20 лет", "в 15 лет"
+  const ageMatch = cleaned.match(/(\d+[-–—]\d+|\d+)\s*(лет|год|years?\s*old)/i);
+  if (ageMatch) {
+    const ageNum = ageMatch[1].includes('-') ? ageMatch[1].split(/[-–—]/)[0] : ageMatch[1];
+    keywords.push(`${ageNum} years old`);
+  }
   
   // Look for year
-  const yearMatch = firstPart.match(/\b(19|20)\d{2}\b/);
+  const yearMatch = cleaned.match(/\b(18|19|20)\d{2}\b/);
   if (yearMatch) keywords.push(yearMatch[0]);
   
-  // If no keywords found, take first 3-5 significant words
+  // Key context words - extract and translate
+  const contextTranslations: Record<string, string> = {
+    'детство': 'childhood', 'детский': 'childhood', 'маленький': 'young child',
+    'молодой': 'young', 'юность': 'young', 'юный': 'young',
+    'школа': 'school', 'университет': 'university', 'колледж': 'college',
+    'ферма': 'farm', 'дом': 'home', 'семья': 'family',
+    'студия': 'studio', 'офис': 'office', 'работа': 'work',
+    'сцена': 'stage', 'концерт': 'concert', 'выступление': 'performance',
+    'свадьба': 'wedding', 'жена': 'wife', 'муж': 'husband',
+    'тюрьма': 'prison', 'суд': 'court', 'арест': 'arrest',
+    'война': 'war', 'армия': 'army', 'военный': 'military',
+    'награда': 'award', 'оскар': 'oscar', 'премия': 'award',
+    'портрет': 'portrait', 'студийный': 'studio portrait',
+    'чёрно-белое': 'black and white', 'черно-белое': 'black and white',
+    'интервью': 'interview', 'пресс': 'press',
+    'ранний': 'early', 'первый': 'first', 'начало': 'early',
+    'банкротство': 'bankruptcy', 'провал': 'failure',
+  };
+  
+  // Find matching Russian words and translate
+  const cleanedLower = cleaned.toLowerCase();
+  for (const [ru, en] of Object.entries(contextTranslations)) {
+    if (cleanedLower.includes(ru)) {
+      keywords.push(en);
+      // Stop after finding 2-3 context words
+      if (keywords.length >= 4) break;
+    }
+  }
+  
+  // If still no good keywords, extract year decade as fallback
+  if (keywords.length === 0 && yearMatch) {
+    const year = parseInt(yearMatch[0]);
+    const decade = Math.floor(year / 10) * 10;
+    keywords.push(`${decade}s`);
+  }
+  
+  // Default fallback
   if (keywords.length === 0) {
-    const words = firstPart.split(/\s+/).filter(w => w.length > 3);
-    keywords.push(...words.slice(0, 4));
+    keywords.push('vintage photo');
   }
   
   return keywords.join(' ');
+}
+
+/**
+ * Check if celebrity name is already in English (Latin characters)
+ */
+function isEnglishName(name: string): boolean {
+  // If more than 50% of letters are Latin, consider it English
+  const latinLetters = name.match(/[a-zA-Z]/g) || [];
+  const allLetters = name.match(/[a-zA-Zа-яА-ЯёЁ]/g) || [];
+  return allLetters.length > 0 && latinLetters.length / allLetters.length > 0.5;
 }
 
 /**
@@ -187,34 +327,23 @@ export async function findFactImage(
   factYear?: number,
   visualSuggestion?: string
 ): Promise<string | null> {
-  // ===== RUSSIAN QUERY (original language - best for Russian celebrities) =====
-  const ruQueryParts = [celebrityName, 'фото'];
+  // Always translate to English using dictionary + transliteration
+  const englishName = translateCelebrityName(celebrityName);
+  const nameIsEnglish = isEnglishName(celebrityName);
   
+  console.log(`  👤 Name: "${celebrityName}" → "${englishName}"`);
+  
+  // Extract keywords from visual suggestion
   let keywords = '';
   if (visualSuggestion) {
     keywords = extractKeywords(visualSuggestion, celebrityName);
-    ruQueryParts.push(keywords);
-  } else {
-    ruQueryParts.push(factTitle);
   }
   
-  if (factYear) {
-    ruQueryParts.push(String(factYear));
-  }
-
-  const ruQuery = ruQueryParts.join(' ');
-  console.log(`  🔎 Russian query: "${ruQuery}"`);
-  
-  // ===== ENGLISH QUERY (wider international coverage) =====
-  const englishName = transliterate(celebrityName);
+  // ===== PRIMARY QUERY (English - wider coverage) =====
   const enQueryParts = [englishName, 'photo'];
   
-  if (visualSuggestion) {
-    const englishKeywords = translateKeywordsToEnglish(keywords);
-    enQueryParts.push(englishKeywords);
-    console.log(`  📝 Keywords: "${keywords}" → EN: "${englishKeywords}"`);
-  } else {
-    enQueryParts.push(transliterate(factTitle));
+  if (keywords) {
+    enQueryParts.push(keywords);
   }
   
   if (factYear) {
@@ -224,26 +353,76 @@ export async function findFactImage(
   const enQuery = enQueryParts.join(' ');
   console.log(`  🔎 English query: "${enQuery}"`);
   
-  // Search BOTH languages in parallel
-  const [ruResults, enResults] = await Promise.all([
-    searchGoogleImages(ruQuery, 3),
-    searchGoogleImages(enQuery, 3)
-  ]);
+  // ===== SECONDARY QUERY (Russian - for Russian celebrities) =====
+  let ruQuery = '';
+  if (!nameIsEnglish) {
+    const ruQueryParts = [celebrityName, 'фото'];
+    
+    // For Russian query, use simpler keywords
+    if (factYear) {
+      ruQueryParts.push(String(factYear));
+    }
+    
+    // Add year decade context
+    if (factYear && factYear < 2000) {
+      ruQueryParts.push('архив');
+    }
+    
+    ruQuery = ruQueryParts.join(' ');
+    console.log(`  🔎 Russian query: "${ruQuery}"`);
+  }
   
-  // Combine results: Russian first (priority for Russian celebrities), then English
-  const allCandidates = [...ruResults, ...enResults];
+  // Search both languages in parallel (or just English if name is English)
+  let allCandidates: string[] = [];
+  
+  if (ruQuery) {
+    const [enResults, ruResults] = await Promise.all([
+      searchGoogleImages(enQuery, 4),
+      searchGoogleImages(ruQuery, 3)
+    ]);
+    // English first for international celebrities
+    allCandidates = [...enResults, ...ruResults];
+  } else {
+    allCandidates = await searchGoogleImages(enQuery, 6);
+  }
+  
   // Remove duplicates
   const uniqueCandidates = [...new Set(allCandidates)];
   
-  console.log(`  📷 Found: ${ruResults.length} RU + ${enResults.length} EN = ${uniqueCandidates.length} unique`);
+  console.log(`  📷 Found: ${uniqueCandidates.length} unique candidates`);
   
   if (uniqueCandidates.length === 0) {
     return null;
   }
 
-  // Use Gemini to validate and pick the best image
+  // Use Gemini to validate and pick the best image with overall timeout
   const description = visualSuggestion || factTitle;
-  const bestImage = await findBestImage(uniqueCandidates, celebrityName, description);
-
-  return bestImage;
+  
+  try {
+    // 60 second timeout for entire validation process
+    const timeoutPromise = new Promise<null>((resolve) => 
+      setTimeout(() => {
+        console.log(`  ⏰ Image validation timeout - returning first candidate`);
+        resolve(null);
+      }, 60000)
+    );
+    
+    const validationPromise = findBestImage(uniqueCandidates, celebrityName, description);
+    const bestImage = await Promise.race([validationPromise, timeoutPromise]);
+    
+    // If timeout occurred but we have candidates, return first one
+    if (bestImage === null && uniqueCandidates.length > 0) {
+      console.log(`  🔄 Timeout fallback: using first candidate without validation`);
+      return uniqueCandidates[0];
+    }
+    
+    return bestImage;
+  } catch (error) {
+    console.error(`  ❌ Image validation error:`, error);
+    // On error, return first candidate without validation
+    if (uniqueCandidates.length > 0) {
+      return uniqueCandidates[0];
+    }
+    return null;
+  }
 }

@@ -62,7 +62,7 @@ export interface BiographyFact {
   description: string;
   category: 'failure' | 'tragedy' | 'controversy' | 'struggle' | 'success';
   year?: number;
-  severity: 1 | 2 | 3 | 4 | 5; // Drama level
+  severity: 1 | 2 | 3 | 4 | 5;
   sources: string[];
 }
 
@@ -85,25 +85,46 @@ export interface ImageReference {
 
 /**
  * Generated article content
+ * Structure matches "Великие Неудачники" article format
  */
 export interface ArticleContent {
   title: string;
-  subtitle: string;
-  intro: string;
+  teaser: string;
   sections: ArticleSection[];
-  conclusion: string;
-  motivation: string;
-  generatedAt: Date;
+  conclusion: {
+    heading: string;
+    text: string;
+  } | string;
+  heroQuote: {
+    text: string;
+    author: string;
+  } | null;
+  bonusFact: string | null;
+  cta: string;
+  brandEnding: string;
+  generatedAt?: Date;
+  
+  // Legacy fields for backwards compatibility
+  subtitle?: string;
+  intro?: string;
+  motivation?: string;
 }
 
 export interface ArticleSection {
-  id: string;
-  order: number;
-  title: string;
-  content: string;
+  number: number;
+  heading: string;
+  paragraph1: string;
+  paragraph2: string;
+  blockquote: string | null;
+  
+  // Legacy fields for backwards compatibility
+  id?: string;
+  order?: number;
+  title?: string;
+  content?: string;
   quote?: Quote;
   memeText?: string;
-  images: ImageReference[];
+  images?: ImageReference[];
 }
 
 /**
@@ -156,11 +177,10 @@ export interface Publication {
 /**
  * Publishing options
  */
-  // language preference for generated content: 'ru' | 'en' | 'both'
-  language: Language;
 export interface PublishingOptions {
   platforms: Platform[];
   scheduledAt?: Date;
+  language: Language;
   customizations?: {
     [key in Platform]?: PlatformCustomization;
   };
