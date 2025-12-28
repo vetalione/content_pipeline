@@ -332,17 +332,17 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
               
               {/* Image for this specific fact */}
               {fact.imageUrl && (
-                <div className="my-3">
+                <div className="my-3 bg-gray-100 rounded-md overflow-hidden">
                   <img 
                     src={fact.imageUrl} 
                     alt={fact.visualSuggestion || fact.title}
-                    className="w-full max-h-64 object-cover rounded-md"
+                    className="w-full max-h-96 object-contain rounded-md"
                     onError={(e) => {
                       e.currentTarget.style.display = 'none';
                     }}
                   />
                   {fact.visualSuggestion && (
-                    <p className="text-xs text-gray-500 mt-1 italic">{fact.visualSuggestion}</p>
+                    <p className="text-xs text-gray-500 mt-1 px-2 pb-2 italic">{fact.visualSuggestion}</p>
                   )}
                 </div>
               )}

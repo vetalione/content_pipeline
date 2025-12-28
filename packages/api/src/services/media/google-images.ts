@@ -100,8 +100,9 @@ export async function findFactImage(
   factYear?: number,
   visualSuggestion?: string
 ): Promise<string | null> {
-  // Build search query
-  const queryParts = [celebrityName];
+  // Build search query - ALWAYS include celebrity name first and "photo" keyword
+  // to prioritize images showing the person themselves
+  const queryParts = [celebrityName, 'photo'];
   
   if (visualSuggestion) {
     queryParts.push(visualSuggestion);

@@ -325,10 +325,13 @@ function createDeepResearchPrompt(celebrityName: string): string {
 - 🖼️ ИЛЛЮСТРАЦИИ (КРИТИЧНО): для КАЖДОГО факта ОБЯЗАТЕЛЬНО найди изображение:
   * visual_suggestion: детальное описание что искать (всегда заполняй)
   * image_url: ПРЯМАЯ ссылка на .jpg/.png файл
+  * ⭐ ОБЯЗАТЕЛЬНОЕ ПРАВИЛО: главный герой (${celebrityName}) ДОЛЖЕН БЫТЬ ИЗОБРАЖЕН на каждой картинке
+  * В visual_suggestion описывай МОМЕНТ С ГЕРОЕМ: "фото ${celebrityName} в момент X", "кадр с ${celebrityName} во время Y"
+  * НЕ используй: абстрактные места, предметы, события БЕЗ главного героя
   * Как искать image_url:
-    - site:commons.wikimedia.org "[имя]" "[событие]" filetype:jpg
-    - site:upload.wikimedia.org "[имя]" 
-    - site:archive.org/download "[имя]"
+    - site:commons.wikimedia.org "${celebrityName}" "[событие]" filetype:jpg
+    - site:upload.wikimedia.org "${celebrityName}" 
+    - site:archive.org/download "${celebrityName}"
     - Проверь что URL заканчивается на .jpg, .jpeg или .png
     - Если не можешь найти URL - оставь пустым "", но visual_suggestion ОБЯЗАТЕЛЕН
 
