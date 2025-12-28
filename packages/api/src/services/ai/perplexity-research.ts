@@ -167,8 +167,28 @@ export async function performPerplexityResearch(
       startedAt: new Date().toISOString(),
     });
     
+    // Debug: Log image status for each fact
+    console.log('📊 Image URLs from Perplexity:');
+    researchData.facts.forEach((f: BiographyFact, i: number) => {
+      console.log(`  [${i + 1}] ${f.title}: ${f.imageUrl ? `✅ ${f.imageUrl.substring(0, 80)}...` : '❌ no URL'}`);
+    });
+    
+    // Validate Perplexity image URLs - check if they are proper HTTP(S) URLs
+    console.log('🔍 Validating Perplexity image URLs...');
+    researchData.facts.forEach((f: BiographyFact, i: number) => {
+      if (f.imageUrl) {
+        // Check if URL is valid HTTP(S) URL
+        if (!f.imageUrl.match(/^https?:\/\/.+\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i)) {
+          console.log(`  ❌ Invalid image URL for fact ${i + 1}: ${f.imageUrl}`);
+          f.imageUrl = undefined; // Clear invalid URL to trigger Google fallback
+        }
+      }
+    });
+    
     // Fallback: Find images via Google Custom Search for facts without imageUrl
     const factsWithoutImages = researchData.facts.filter((f: BiographyFact) => !f.imageUrl);
+    console.log(`🔍 Facts needing Google search: ${factsWithoutImages.length}/${researchData.facts.length}`);
+    
     if (factsWithoutImages.length > 0) {
       console.log(`🔍 Google fallback: searching images for ${factsWithoutImages.length} facts`);
       
