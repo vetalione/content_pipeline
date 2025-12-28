@@ -24,6 +24,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
   const [editingFactId, setEditingFactId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any>(null);
   const [progress, setProgress] = useState<ResearchProgress | null>(null);
+  const [regeneratingImageId, setRegeneratingImageId] = useState<string | null>(null);
 
   // Connect to Socket.IO
   useEffect(() => {
@@ -161,6 +162,44 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
         percentage: 0,
         message: `Ошибка: ${error instanceof Error ? error.message : 'Unknown error'}`,
       });
+    }
+  };
+
+  const handleRegenerateImage = async (factId: string) => {
+    setRegeneratingImageId(factId);
+    
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${API_URL}/api/articles/${articleId}/facts/${factId}/regenerate-image`, {
+        method: 'POST',
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to regenerate image');
+      }
+      
+      console.log('✅ Image regenerated:', result.data);
+      
+      // Update local state with new image
+      setFacts(prevFacts => 
+        prevFacts.map(f => 
+          f.id === factId 
+            ? { ...f, imageUrl: result.data.newImageUrl }
+            : f
+        )
+      );
+      
+      // Notify parent to refresh
+      if (onUpdate) {
+        onUpdate();
+      }
+    } catch (error) {
+      console.error('Image regeneration error:', error);
+      alert(`Ошибка переподбора картинки: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setRegeneratingImageId(null);
     }
   };
 
@@ -332,18 +371,40 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
               
               {/* Image for this specific fact */}
               {fact.imageUrl && (
-                <div className="my-3 bg-gray-100 rounded-md overflow-hidden">
-                  <img 
-                    src={fact.imageUrl} 
-                    alt={fact.visualSuggestion || fact.title}
-                    className="w-full max-h-96 object-contain rounded-md"
-                    onError={(e) => {
-                      e.currentTarget.style.display = 'none';
-                    }}
-                  />
-                  {fact.visualSuggestion && (
-                    <p className="text-xs text-gray-500 mt-1 px-2 pb-2 italic">{fact.visualSuggestion}</p>
-                  )}
+                <div className="my-3">
+                  <div className="bg-gray-100 rounded-md overflow-hidden">
+                    <img 
+                      src={fact.imageUrl} 
+                      alt={fact.visualSuggestion || fact.title}
+                      className="w-full max-h-96 object-contain rounded-md"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                    {fact.visualSuggestion && (
+                      <p className="text-xs text-gray-500 mt-1 px-2 pb-2 italic">{fact.visualSuggestion}</p>
+                    )}
+                  </div>
+                  
+                  {/* Regenerate image button */}
+                  <button
+                    onClick={() => handleRegenerateImage(fact.id)}
+                    disabled={regeneratingImageId === fact.id}
+                    className="mt-2 text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Найти альтернативную картинку"
+                  >
+                    {regeneratingImageId === fact.id ? (
+                      <>
+                        <RotateCcw size={12} className="animate-spin" />
+                        Подбираю...
+                      </>
+                    ) : (
+                      <>
+                        <RotateCcw size={12} />
+                        Переподобрать картинку
+                      </>
+                    )}
+                  </button>
                 </div>
               )}
               

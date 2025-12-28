@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/db';
 import { Article, ArticleStatus, PipelineStage } from '@content-pipeline/shared';
+import { searchGoogleImages } from '../services/media/google-images';
 
 export const articlesRouter = Router();
 
@@ -127,3 +128,83 @@ articlesRouter.delete('/:id', async (req, res, next) => {
     next(error);
   }
 });
+
+// Regenerate image for a specific fact
+articlesRouter.post('/:id/facts/:factId/regenerate-image', async (req, res, next) => {
+  try {
+    const { id: articleId, factId } = req.params;
+    
+    // Get article with research data
+    const article = await prisma.article.findUnique({
+      where: { id: articleId }
+    });
+    
+    if (!article || !article.researchData) {
+      return res.status(404).json({ success: false, message: 'Article or research data not found' });
+    }
+    
+    const researchData = article.researchData as any;
+    const factIndex = researchData.facts?.findIndex((f: any) => f.id === factId);
+    
+    if (factIndex === -1 || factIndex === undefined) {
+      return res.status(404).json({ success: false, message: 'Fact not found' });
+    }
+    
+    const fact = researchData.facts[factIndex];
+    const currentImageUrl = fact.imageUrl;
+    
+    // Build search query
+    const queryParts = [article.celebrityName, 'photo'];
+    if (fact.visualSuggestion) {
+      queryParts.push(fact.visualSuggestion);
+    } else {
+      queryParts.push(fact.title);
+    }
+    if (fact.year) {
+      queryParts.push(String(fact.year));
+    }
+    
+    const query = queryParts.join(' ');
+    console.log(`🔄 Regenerating image for fact "${fact.title}": ${query}`);
+    
+    // Get up to 5 alternative images
+    const imageResults = await searchGoogleImages(query, 5);
+    
+    if (imageResults.length === 0) {
+      return res.status(404).json({ 
+        success: false, 
+        message: 'No alternative images found' 
+      });
+    }
+    
+    // Find first image that's different from current one
+    const newImageUrl = imageResults.find(url => url !== currentImageUrl) || imageResults[0];
+    
+    // Update fact with new image
+    researchData.facts[factIndex].imageUrl = newImageUrl;
+    
+    await prisma.article.update({
+      where: { id: articleId },
+      data: {
+        researchData: researchData as any,
+        updatedAt: new Date()
+      }
+    });
+    
+    console.log(`✅ Updated fact image: ${currentImageUrl} → ${newImageUrl}`);
+    
+    res.json({ 
+      success: true, 
+      data: { 
+        factId,
+        oldImageUrl: currentImageUrl,
+        newImageUrl 
+      } 
+    });
+    
+  } catch (error) {
+    console.error('Image regeneration error:', error);
+    next(error);
+  }
+});
+
