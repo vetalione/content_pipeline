@@ -203,13 +203,12 @@ function createDeepResearchPrompt(celebrityName: string): string {
 - ДЕТСТВО: бедность, школа, первая работа (5-16 лет)
 - ЮНОСТЬ: отказы, провалы, безденежье (17-25 лет)
 - КАРЬЕРА: банкротства, увольнения, зависимости (25+ лет)
-- РЕДКИЕ ФОТО: найди 5-8 редких фотографий с прямыми ссылками:
-  * Детские фото из школьных альбомов, семейных архивов
-  * Фото с первых мест работы
-  * Газетные вырезки с фото до славы
-  * Фото из музеев, библиотек, университетских коллекций
-  * Ищи на: Wikimedia Commons, archive.org/details/image, музейных сайтах
-  * ОБЯЗАТЕЛЬНО: прямая ссылка на .jpg/.png файл (не страницу!)
+- ИЛЛЮСТРАЦИИ: для КАЖДОГО факта найди подходящее изображение:
+  * Описание в visual_suggestion: что искать
+  * Прямая ссылка в image_url: .jpg/.png URL изображения
+  * Источники: Wikimedia Commons, archive.org/details/image, музеи
+  * Контекст важен: картинка должна соответствовать ЭТОМУ факту
+  * Примеры: детское фото для факта о детстве, газета для факта о скандале
 
 📋 ОБЯЗАТЕЛЬНЫЙ JSON формат:
 
@@ -229,7 +228,8 @@ function createDeepResearchPrompt(celebrityName: string): string {
       "outcome": "что случилось дальше",
       "severity": 1-5,
       "source": "конкретный источник: книга/статья/интервью с датой",
-      "visual_suggestion": "какое фото/документ искать для иллюстрации"
+      "visual_suggestion": "описание какое фото/документ искать",
+      "image_url": "ПРЯМАЯ ссылка на .jpg/.png изображение для ЭТОГО факта (найди через поиск)"
     }
   ],
   "quotes": [
@@ -256,16 +256,6 @@ function createDeepResearchPrompt(celebrityName: string): string {
       "year": "год публикации",
       "url": "ссылка если есть",
       "key_facts": "какие редкие факты оттуда"
-    }
-  ],
-  "rare_images": [
-    {
-      "description": "что изображено (детство, школа, первая работа и т.д.)",
-      "image_url": "прямая ссылка на изображение (найди через поиск изображений)",
-      "page_url": "страница где размещено изображение",
-      "source": "откуда фото (музей, архив, газета)",
-      "year": "примерный год когда сделано фото",
-      "is_rare": true
     }
   ],
   "bonus_fact": "шокирующий малоизвестный факт с источником",
@@ -403,7 +393,9 @@ function convertToResearchData(rawData: any, citations: string[]): ResearchData 
         category: 'failure',
         year: failure.year ? parseInt(failure.year) : undefined,
         severity: failure.severity || 3,
-        sources: failure.source ? [failure.source] : []
+        sources: failure.source ? [failure.source] : [],
+        imageUrl: failure.image_url || undefined,
+        visualSuggestion: failure.visual_suggestion || undefined
       });
     });
   }
@@ -426,57 +418,14 @@ function convertToResearchData(rawData: any, citations: string[]): ResearchData 
   // Deduplicate sources
   const uniqueSources = Array.from(new Set(allSources));
   
-  // Extract image hints from failures and teaser
+  // Images are now embedded in facts, not separate array
+  // Keep images array empty (for compatibility with types)
   const images: any[] = [];
-  
-  // First, add images from rare_images array (if Perplexity found actual URLs)
-  if (rawData.rare_images && Array.isArray(rawData.rare_images)) {
-    rawData.rare_images.forEach((img: any, index: number) => {
-      if (img.image_url) {
-        images.push({
-          id: `img-rare-${index + 1}`,
-          url: img.image_url,
-          description: img.description || '',
-          source: img.source || img.page_url || 'Unknown',
-          isRare: img.is_rare !== false,
-          year: img.year ? parseInt(img.year) : undefined
-        });
-      }
-    });
-  }
-  
-  // Add childhood photo hint from teaser (as fallback if no URL found)
-  if (rawData.teaser?.childhood_photo_hint) {
-    images.push({
-      id: 'img-childhood',
-      url: '', // To be filled by image search later if needed
-      description: rawData.teaser.childhood_photo_hint,
-      source: 'Childhood photo',
-      isRare: true,
-      year: undefined
-    });
-  }
-  
-  // Add visual suggestions from failures (as fallback hints)
-  if (rawData.failures && Array.isArray(rawData.failures)) {
-    rawData.failures.forEach((failure: any, index: number) => {
-      if (failure.visual_suggestion) {
-        images.push({
-          id: `img-failure-${index + 1}`,
-          url: '', // To be filled by image search later if needed
-          description: failure.visual_suggestion,
-          source: failure.title || `Failure ${index + 1}`,
-          isRare: true,
-          year: failure.year ? parseInt(failure.year) : undefined
-        });
-      }
-    });
-  }
   
   return {
     facts,
     quotes,
-    images, // Image hints for later search
+    images, // Empty - images now in facts[].imageUrl
     sources: uniqueSources,
     generatedAt: new Date()
   };

@@ -14,7 +14,7 @@ export default function ResearchView({ data }: Props) {
       <div className="mb-8">
         <h3 className="text-lg font-semibold mb-4">Факты из биографии ({data.facts?.length || 0})</h3>
         <div className="space-y-4">
-          {data.facts?.map((fact) => (
+          {data.facts?.map((fact: any) => (
             <div key={fact.id} className="p-4 bg-gray-50 rounded-lg">
               <div className="flex justify-between items-start mb-2">
                 <h4 className="font-semibold break-words">{fact.title}</h4>
@@ -27,6 +27,31 @@ export default function ResearchView({ data }: Props) {
                   {fact.category}
                 </span>
               </div>
+              
+              {/* Image for this specific fact */}
+              {fact.imageUrl && (
+                <div className="my-3">
+                  <img 
+                    src={fact.imageUrl} 
+                    alt={fact.visualSuggestion || fact.title}
+                    className="w-full max-h-64 object-cover rounded-md"
+                    onError={(e) => {
+                      e.currentTarget.style.display = 'none';
+                    }}
+                  />
+                  {fact.visualSuggestion && (
+                    <p className="text-xs text-gray-500 mt-1 italic">{fact.visualSuggestion}</p>
+                  )}
+                </div>
+              )}
+              
+              {/* Visual suggestion hint if no image URL */}
+              {!fact.imageUrl && fact.visualSuggestion && (
+                <div className="my-3 p-2 bg-amber-50 border-l-2 border-amber-400 rounded">
+                  <p className="text-xs text-amber-800">💡 {fact.visualSuggestion}</p>
+                </div>
+              )}
+              
               <p className="text-gray-700 text-sm break-words whitespace-pre-wrap">{fact.description}</p>
               {fact.year && (
                 <p className="text-xs text-gray-500 mt-2">Год: {fact.year}</p>
@@ -55,7 +80,7 @@ export default function ResearchView({ data }: Props) {
 
       {/* Sources */}
       {data.sources && data.sources.length > 0 && (
-        <div className="mb-8">
+        <div>
           <h3 className="text-lg font-semibold mb-3">🔗 Источники</h3>
           <ul className="space-y-2">
             {data.sources.map((source, index) => (
@@ -65,52 +90,6 @@ export default function ResearchView({ data }: Props) {
               </li>
             ))}
           </ul>
-        </div>
-      )}
-
-      {/* Image Hints */}
-      {data.images && data.images.length > 0 && (
-        <div>
-          <h3 className="text-lg font-semibold mb-3">📷 Редкие фото ({data.images.length})</h3>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-            {data.images.map((image) => (
-              <div key={image.id} className="border rounded-lg overflow-hidden bg-white shadow-sm">
-                {image.url ? (
-                  // Real image found
-                  <div>
-                    <img 
-                      src={image.url} 
-                      alt={image.description}
-                      className="w-full h-48 object-cover"
-                      onError={(e) => {
-                        // Hide broken images
-                        e.currentTarget.style.display = 'none';
-                      }}
-                    />
-                    <div className="p-3">
-                      <p className="text-sm font-medium text-gray-900 mb-1">{image.source}</p>
-                      <p className="text-xs text-gray-600 break-words">{image.description}</p>
-                      {image.year && (
-                        <p className="text-xs text-gray-500 mt-1">Год: {image.year}</p>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  // Just a hint, no actual image yet
-                  <div className="p-3 bg-amber-50">
-                    <p className="text-sm font-medium text-amber-900 mb-1">{image.source}</p>
-                    <p className="text-xs text-amber-800 break-words">{image.description}</p>
-                    {image.year && (
-                      <p className="text-xs text-amber-600 mt-1">Год: {image.year}</p>
-                    )}
-                    <p className="text-xs text-amber-600 mt-2 italic">
-                      💡 Подсказка для поиска
-                    </p>
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
         </div>
       )}
     </div>

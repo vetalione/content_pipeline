@@ -64,6 +64,8 @@ export interface BiographyFact {
   year?: number;
   severity: 1 | 2 | 3 | 4 | 5; // Drama level
   sources: string[];
+  imageUrl?: string; // Direct link to image illustrating this fact
+  visualSuggestion?: string; // Description of what image to search for
 }
 
 export interface Quote {
