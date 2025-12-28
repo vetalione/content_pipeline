@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
-import { ResearchData } from '../types';
+import { ResearchData, BiographyFact } from '@content-pipeline/shared';
 import { ExternalLink, Edit2, Trash2, Square, RotateCcw, Search } from 'lucide-react';
-import { io, Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
 
 interface Props {
   data: ResearchData;
@@ -24,7 +24,6 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
   const [editingFactId, setEditingFactId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any>(null);
   const [progress, setProgress] = useState<ResearchProgress | null>(null);
-  const [socket, setSocket] = useState<Socket | null>(null);
 
   // Connect to Socket.IO
   useEffect(() => {
@@ -66,8 +65,6 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
       });
     });
 
-    setSocket(newSocket);
-
     return () => {
       newSocket.disconnect();
     };
@@ -88,7 +85,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
       });
 
       if (res.ok) {
-        setFacts(facts.filter(f => f.id !== factId));
+        setFacts(facts.filter((f: BiographyFact) => f.id !== factId));
         onUpdate?.();
       }
     } catch (error) {
@@ -109,7 +106,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
 
       if (res.ok) {
         const { data: updatedFact } = await res.json();
-        setFacts(facts.map(f => f.id === editingFactId ? updatedFact : f));
+        setFacts(facts.map((f: BiographyFact) => f.id === editingFactId ? updatedFact : f));
         setEditingFactId(null);
         setEditForm(null);
         onUpdate?.();
@@ -132,7 +129,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
     }
   };
 
-  const visibleFacts = facts.filter(f => !f.isDeleted);
+  const visibleFacts = (facts as BiographyFact[]).filter(f => !f.isDeleted);
 
   return (
     <div className="card">
@@ -357,7 +354,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
         <div className="mb-8">
           <h3 className="text-lg font-semibold mb-4">💬 Цитаты ({data.quotes.length})</h3>
           <div className="space-y-3">
-            {data.quotes.map((quote) => (
+            {data.quotes.map((quote: any) => (
               <div key={quote.id} className="p-4 bg-blue-50 border-l-4 border-blue-500">
                 <p className="italic text-gray-800 mb-2 break-words">"{quote.text}"</p>
                 <p className="text-xs text-gray-600 break-words">
@@ -374,7 +371,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
         <div>
           <h3 className="text-lg font-semibold mb-3">🔗 Все источники</h3>
           <ul className="space-y-2">
-            {data.sources.map((source, index) => (
+            {data.sources.map((source: string, index: number) => (
               <li key={index} className="flex items-start gap-2 text-sm text-blue-600 break-all">
                 <ExternalLink size={14} className="flex-shrink-0 mt-0.5" />
                 <a 
