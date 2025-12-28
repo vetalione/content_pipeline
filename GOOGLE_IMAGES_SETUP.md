@@ -49,20 +49,42 @@ In Railway dashboard for the API service:
 ```bash
 GOOGLE_API_KEY=AIzaSyB...your-api-key...
 GOOGLE_CX=a1b2c3...your-search-engine-id...
+GOOGLE_GEMINI_API_KEY=AIzaSyD...your-gemini-key...  # For image validation (optional but recommended)
 ```
 
-### 4. Test Locally (Optional)
+### 4. Get Gemini API Key (Optional - for better image accuracy)
+
+**Why**: Gemini Vision validates images to ensure they show the correct celebrity.
+
+1. Go to https://makersuite.google.com/app/apikey
+2. Create API key
+3. Add to Railway environment variables:
+```bash
+GOOGLE_GEMINI_API_KEY=AIzaSyD...your-gemini-key...
+```
+
+**Cost**: 
+- Free tier: 15 requests/minute, 1500/day
+- ~12 requests per article (one per fact)
+- Free for ~125 articles/day
+
+Without Gemini, system still works but may pick less relevant images.
+
+### 5. Test Locally (Optional)
 
 Add to your `.env` file:
 
 ```bash
 GOOGLE_API_KEY=AIzaSyB...
 GOOGLE_CX=a1b2c3...
+GOOGLE_GEMINI_API_KEY=AIzaSyD...  # Optional for validation
 ```
 
 Run research and check logs for:
 ```
 🔍 Google fallback: searching images for X facts
+🔍 Validating 5 image candidates with Gemini...
+✅ Best image: https://... (confidence: 95%)
 ✅ Found image for: [Fact Title]
 📸 Total images: X/12
 ```
@@ -70,11 +92,12 @@ Run research and check logs for:
 ## How It Works
 
 1. **Primary**: Perplexity AI searches for `image_url` in research
-2. **Fallback**: If `imageUrl` is missing, Google Custom Search finds it:
-   - Constructs query: `{celebrityName} {visualSuggestion} {year}`
-   - Searches for large .jpg/.png images
-   - Returns top 3 results, picks best one
-3. **Result**: Every fact gets an image (Perplexity or Google)
+2. **Fallback**: If `imageUrl` is missing or invalid, Google Custom Search finds it:
+   - Constructs query: `{celebrityName} photo {visualSuggestion} {year}`
+   - Searches for 5 large .jpg/.png images
+   - **Gemini Vision validates each image**: checks if celebrity is visible and matches description
+   - Picks best image with confidence >= 70%
+3. **Result**: Every fact gets a validated, relevant image
 
 ## Monitoring Usage
 

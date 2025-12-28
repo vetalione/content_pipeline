@@ -2,6 +2,8 @@
  * Google Custom Search API for finding images
  */
 
+import { findBestImage } from './gemini-image-validator';
+
 interface GoogleImageResult {
   link: string;
   title: string;
@@ -92,7 +94,7 @@ export async function searchGoogleImages(
 
 /**
  * Find image for a specific biography fact
- * Constructs search query from fact details
+ * Constructs search query from fact details and validates with Gemini
  */
 export async function findFactImage(
   celebrityName: string,
@@ -115,7 +117,17 @@ export async function findFactImage(
   }
 
   const query = queryParts.join(' ');
-  const results = await searchGoogleImages(query, 3);
+  
+  // Get multiple image candidates from Google
+  const candidateUrls = await searchGoogleImages(query, 5);
+  
+  if (candidateUrls.length === 0) {
+    return null;
+  }
 
-  return results.length > 0 ? results[0] : null;
+  // Use Gemini to validate and pick the best image
+  const description = visualSuggestion || factTitle;
+  const bestImage = await findBestImage(candidateUrls, celebrityName, description);
+
+  return bestImage;
 }
