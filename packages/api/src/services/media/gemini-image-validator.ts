@@ -36,12 +36,18 @@ export async function validateImageRelevance(
 
   try {
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-1.5-pro' });
 
     // Fetch image as base64
     const imageResponse = await fetch(imageUrl);
     if (!imageResponse.ok) {
-      throw new Error(`Failed to fetch image: ${imageResponse.status}`);
+      // Image not accessible (403, 404, etc.) - skip validation
+      console.log(`  ⚠️ Image not accessible (${imageResponse.status}): ${imageUrl.substring(0, 60)}...`);
+      return {
+        isRelevant: false,
+        confidence: 0,
+        reasoning: `Image not accessible: ${imageResponse.status}`
+      };
     }
     
     const imageBuffer = await imageResponse.arrayBuffer();
@@ -136,7 +142,7 @@ export async function findBestImage(
 
   if (relevantImages.length > 0) {
     const best = relevantImages[0];
-    console.log(`  ✅ Best image: ${best.url} (confidence: ${best.validation.confidence}%)`);
+    console.log(`  ✅ Best image: ${best.url.substring(0, 80)}... (confidence: ${best.validation.confidence}%)`);
     return best.url;
   }
 
@@ -147,8 +153,16 @@ export async function findBestImage(
 
   if (acceptable.length > 0) {
     const best = acceptable[0];
-    console.log(`  ⚠️ Acceptable image: ${best.url} (confidence: ${best.validation.confidence}%)`);
+    console.log(`  ⚠️ Acceptable image: ${best.url.substring(0, 80)}... (confidence: ${best.validation.confidence}%)`);
     return best.url;
+  }
+
+  // Last resort: if validation failed for all images (errors), take first accessible one
+  const accessibleImages = validations.filter(v => v.validation.confidence > 0);
+  if (accessibleImages.length > 0) {
+    const fallback = accessibleImages[0];
+    console.log(`  🔄 Fallback: using first accessible image (validation failed)`);
+    return fallback.url;
   }
 
   console.log(`  ❌ No relevant images found`);
