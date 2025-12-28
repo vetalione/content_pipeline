@@ -22,14 +22,21 @@ export default function NewArticle() {
       const response = await api.post('/articles', payload);
       const articleId = response.data.data.id;
       
-      // Start research automatically
-      await api.post(`/pipeline/${articleId}/research`);
-      
+      // Navigate first so Socket.IO connects before research starts
       navigate(`/articles/${articleId}`);
+      
+      // Start research after a brief delay to let Socket.IO connect
+      setTimeout(async () => {
+        try {
+          await api.post(`/pipeline/${articleId}/research`);
+        } catch (error) {
+          console.error('Failed to start research:', error);
+        }
+      }, 500);
+      
     } catch (error) {
       console.error('Failed to create article:', error);
       alert('Ошибка при создании статьи');
-    } finally {
       setLoading(false);
     }
   };
