@@ -93,6 +93,49 @@ export async function searchGoogleImages(
 }
 
 /**
+ * Extract key search terms from visual suggestion
+ * Removes overly specific details that hurt Google search
+ */
+function extractKeywords(visualSuggestion: string, celebrityName: string): string {
+  // Remove the celebrity name from suggestion (we add it separately)
+  let cleaned = visualSuggestion.replace(new RegExp(celebrityName, 'gi'), '');
+  
+  // Extract key phrases (keep only important nouns and context)
+  // Remove: detailed descriptions, emotions, clothing details
+  
+  // Take first sentence or clause (before colon or comma)
+  const firstPart = cleaned.split(/[,:]/)[0];
+  
+  // Extract key nouns (age, event, location)
+  const keywords: string[] = [];
+  
+  // Look for age mentions
+  const ageMatch = firstPart.match(/(\d+[-–—]\d+|^\d+)\s*(лет|год)/i);
+  if (ageMatch) keywords.push(ageMatch[0]);
+  
+  // Look for key event words
+  const eventWords = ['школа', 'университет', 'суд', 'концерт', 'сцена', 'студия', 'тюрьма', 
+                      'детство', 'юность', 'свадьба', 'развод', 'арест', 'интервью'];
+  eventWords.forEach(word => {
+    if (firstPart.toLowerCase().includes(word)) {
+      keywords.push(word);
+    }
+  });
+  
+  // Look for year
+  const yearMatch = firstPart.match(/\b(19|20)\d{2}\b/);
+  if (yearMatch) keywords.push(yearMatch[0]);
+  
+  // If no keywords found, take first 3-5 significant words
+  if (keywords.length === 0) {
+    const words = firstPart.split(/\s+/).filter(w => w.length > 3);
+    keywords.push(...words.slice(0, 4));
+  }
+  
+  return keywords.join(' ');
+}
+
+/**
  * Find image for a specific biography fact
  * Constructs search query from fact details and validates with Gemini
  */
@@ -107,7 +150,10 @@ export async function findFactImage(
   const queryParts = [celebrityName, 'photo'];
   
   if (visualSuggestion) {
-    queryParts.push(visualSuggestion);
+    // Extract only key search terms, not full description
+    const keywords = extractKeywords(visualSuggestion, celebrityName);
+    queryParts.push(keywords);
+    console.log(`  📝 Simplified: "${visualSuggestion.substring(0, 60)}..." → "${keywords}"`);
   } else {
     queryParts.push(factTitle);
   }
@@ -117,6 +163,7 @@ export async function findFactImage(
   }
 
   const query = queryParts.join(' ');
+  console.log(`  🔎 Final query: "${query}"`);
   
   // Get multiple image candidates from Google
   const candidateUrls = await searchGoogleImages(query, 5);
