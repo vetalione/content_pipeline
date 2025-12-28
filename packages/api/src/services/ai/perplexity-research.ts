@@ -1,6 +1,7 @@
 import { prisma } from '../../lib/db';
 import { PipelineStage, ResearchData, BiographyFact } from '@content-pipeline/shared';
 import { emitResearchProgress, emitResearchComplete, emitResearchError } from '../../lib/socket';
+import { findFactImage } from '../media/google-images';
 
 /**
  * Perform deep research using Perplexity AI with web search
@@ -165,6 +166,38 @@ export async function performPerplexityResearch(
       message: `Найдено ${researchData.facts.length} фактов`,
       startedAt: new Date().toISOString(),
     });
+    
+    // Fallback: Find images via Google Custom Search for facts without imageUrl
+    const factsWithoutImages = researchData.facts.filter((f: BiographyFact) => !f.imageUrl);
+    if (factsWithoutImages.length > 0) {
+      console.log(`🔍 Google fallback: searching images for ${factsWithoutImages.length} facts`);
+      
+      emitResearchProgress(articleId, {
+        status: 'parsing',
+        currentFact: researchData.facts.length,
+        totalFacts: researchData.facts.length,
+        percentage: 97,
+        message: `Поиск изображений через Google...`,
+        startedAt: new Date().toISOString(),
+      });
+      
+      for (const fact of factsWithoutImages) {
+        const imageUrl = await findFactImage(
+          article.celebrityName,
+          fact.title,
+          fact.year,
+          fact.visualSuggestion
+        );
+        
+        if (imageUrl) {
+          fact.imageUrl = imageUrl;
+          console.log(`✅ Found image for: ${fact.title}`);
+        }
+      }
+      
+      const foundCount = researchData.facts.filter((f: BiographyFact) => f.imageUrl).length;
+      console.log(`📸 Total images: ${foundCount}/${researchData.facts.length}`);
+    }
     
     // Save to database
     await prisma.article.update({

@@ -1,0 +1,120 @@
+/**
+ * Google Custom Search API for finding images
+ */
+
+interface GoogleImageResult {
+  link: string;
+  title: string;
+  snippet: string;
+  mime: string;
+  image: {
+    contextLink: string;
+    height: number;
+    width: number;
+    thumbnailLink: string;
+  };
+}
+
+interface GoogleSearchResponse {
+  items?: GoogleImageResult[];
+  searchInformation?: {
+    totalResults: string;
+  };
+}
+
+/**
+ * Search for images using Google Custom Search API
+ * @param query Search query (e.g., "Leo Tolstoy childhood photo 1850")
+ * @param numResults Number of results to return (max 10 per request)
+ * @returns Array of direct image URLs
+ */
+export async function searchGoogleImages(
+  query: string,
+  numResults: number = 3
+): Promise<string[]> {
+  const apiKey = process.env.GOOGLE_API_KEY;
+  const cx = process.env.GOOGLE_CX;
+
+  if (!apiKey || !cx) {
+    console.warn('⚠️ Google Custom Search not configured (GOOGLE_API_KEY or GOOGLE_CX missing)');
+    return [];
+  }
+
+  try {
+    const url = new URL('https://www.googleapis.com/customsearch/v1');
+    url.searchParams.set('key', apiKey);
+    url.searchParams.set('cx', cx);
+    url.searchParams.set('q', query);
+    url.searchParams.set('searchType', 'image');
+    url.searchParams.set('num', String(Math.min(numResults, 10)));
+    url.searchParams.set('safe', 'off');
+    url.searchParams.set('imgSize', 'large');
+    url.searchParams.set('fileType', 'jpg,png');
+
+    console.log(`🔍 Google Image Search: "${query}"`);
+
+    const response = await fetch(url.toString());
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Google Search API error: ${response.status} - ${errorText}`);
+      return [];
+    }
+
+    const data = await response.json() as GoogleSearchResponse;
+
+    if (!data.items || data.items.length === 0) {
+      console.log(`No images found for: "${query}"`);
+      return [];
+    }
+
+    const imageUrls = data.items
+      .map(item => item.link)
+      .filter(url => {
+        // Only allow direct image URLs
+        const lower = url.toLowerCase();
+        return lower.endsWith('.jpg') || 
+               lower.endsWith('.jpeg') || 
+               lower.endsWith('.png') ||
+               lower.includes('.jpg?') ||
+               lower.includes('.jpeg?') ||
+               lower.includes('.png?');
+      });
+
+    console.log(`✅ Found ${imageUrls.length} images for: "${query}"`);
+    return imageUrls;
+
+  } catch (error) {
+    console.error('Google Image Search error:', error);
+    return [];
+  }
+}
+
+/**
+ * Find image for a specific biography fact
+ * Constructs search query from fact details
+ */
+export async function findFactImage(
+  celebrityName: string,
+  factTitle: string,
+  factYear?: number,
+  visualSuggestion?: string
+): Promise<string | null> {
+  // Build search query
+  const queryParts = [celebrityName];
+  
+  if (visualSuggestion) {
+    queryParts.push(visualSuggestion);
+  } else {
+    queryParts.push(factTitle);
+  }
+  
+  if (factYear) {
+    queryParts.push(String(factYear));
+  }
+
+  const query = queryParts.join(' ');
+  const results = await searchGoogleImages(query, 3);
+
+  return results.length > 0 ? results[0] : null;
+}
