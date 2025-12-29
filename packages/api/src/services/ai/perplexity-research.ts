@@ -104,7 +104,7 @@ export async function performPerplexityResearch(
             '-pinterest.com',
             '-istockphoto.com'
           ],
-          image_format_filter: ['jpg', 'png'], // Only jpg and png, no webp
+          image_format_filter: ['jpeg', 'png'], // Only jpeg and png, no webp
           search_recency_filter: null // No recency filter for historical research
         })
       }),
