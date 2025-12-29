@@ -197,7 +197,7 @@ function getRandomColors(): string {
 }
 
 /**
- * Generate cover image using Gemini Imagen
+ * Generate cover image using Gemini with native image generation (supports Russian text)
  */
 export async function generateCoverImage(options: CoverGenerationOptions): Promise<{
   success: boolean;
@@ -215,33 +215,42 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
 
   const iconsText = icons.join(', ');
   
+  // Prompt with Russian text for title and sharp fact
   const prompt = `A realistic photo collage cover art. The central figure is a cutout portrait of ${heroName} in their prime, looking directly at the viewer with a characteristic expression. This portrait is superimposed over a dark, textured chalkboard background covered with faint chalk scratches and scrawls. Behind the figure's silhouette is a vibrant, textured ${colorScheme} cloud or aura, rendered in a style that mimics a chalk or pastel drawing, billowing outwards. Add chalk-drawn ${iconsText} related to the subject. At the top, in a chalk-written font, is the title "${title}". A chalk-drawn arrow points to the figure with the text "${sharpFact}" next to it. The overall style is a mix of photography and chalk illustration on a worn chalkboard surface.`;
 
-  console.log('🎨 Generating cover with Gemini Imagen...');
+  console.log('🎨 Generating cover with Gemini Nano Banana (Russian support)...');
   console.log('📝 Prompt:', prompt);
 
   try {
     const client = getGenAI();
-    const response = await client.models.generateImages({
-      model: 'imagen-4.0-generate-001',
-      prompt: prompt,
+    
+    // Use gemini-2.0-flash-exp with generateContent for native image generation
+    // This model supports Russian text in images
+    const response = await client.models.generateContent({
+      model: 'gemini-2.0-flash-exp',
+      contents: prompt,
       config: {
-        numberOfImages: 1,
-        aspectRatio: '16:9',
+        responseModalities: ['Text', 'Image'],
       },
     });
 
-    if (!response.generatedImages || response.generatedImages.length === 0) {
-      throw new Error('No images generated');
-    }
-
-    const imageData = response.generatedImages[0];
+    // Find image in response parts
+    let imageBase64: string | null = null;
     
-    if (!imageData.image?.imageBytes) {
-      throw new Error('No image bytes in response');
+    if (response.candidates && response.candidates[0]?.content?.parts) {
+      for (const part of response.candidates[0].content.parts) {
+        if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
+          imageBase64 = part.inlineData.data || null;
+          break;
+        }
+      }
     }
 
-    const imageBase64 = imageData.image.imageBytes;
+    if (!imageBase64) {
+      // Log response for debugging
+      console.log('Response structure:', JSON.stringify(response, null, 2).substring(0, 1000));
+      throw new Error('No image in response');
+    }
     
     const coversDir = path.join(process.cwd(), 'covers');
     await fs.mkdir(coversDir, { recursive: true });
