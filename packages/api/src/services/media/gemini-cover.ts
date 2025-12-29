@@ -215,22 +215,58 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
 
   const iconsText = icons.join(', ');
   
-  // Prompt with Russian text for title and sharp fact
-  const prompt = `A realistic photo collage cover art. The central figure is a cutout portrait of ${heroName} in their prime, looking directly at the viewer with a characteristic expression. This portrait is superimposed over a dark, textured chalkboard background covered with faint chalk scratches and scrawls. Behind the figure's silhouette is a vibrant, textured ${colorScheme} cloud or aura, rendered in a style that mimics a chalk or pastel drawing, billowing outwards. Add chalk-drawn ${iconsText} related to the subject. At the top, in a chalk-written font, is the title "${title}". A chalk-drawn arrow points to the figure with the text "${sharpFact}" next to it. The overall style is a mix of photography and chalk illustration on a worn chalkboard surface.`;
+// Load reference image (Adele.jpg) as example
+  const referenceImagePath = path.join(process.cwd(), 'Adele.jpg');
+  let referenceImageBase64 = '';
+  
+  try {
+    const imageBuffer = await fs.readFile(referenceImagePath);
+    referenceImageBase64 = imageBuffer.toString('base64');
+    console.log('✅ Loaded reference image:', referenceImagePath);
+  } catch (err) {
+    console.warn('⚠️ Could not load reference image, continuing without it:', err);
+  }
 
-  console.log('🎨 Generating cover with Gemini Nano Banana (Russian support)...');
+  // Prompt with Russian text for title and sharp fact
+  const prompt = `Create a cover image in EXACTLY this style (see reference image). A realistic photo collage cover art. The central figure is a cutout portrait of ${heroName} in their prime, looking directly at the viewer with a characteristic expression. This portrait is superimposed over a dark, textured chalkboard background covered with faint chalk scratches and scrawls. Behind the figure's silhouette is a vibrant, textured ${colorScheme} cloud or aura, rendered in a style that mimics a chalk or pastel drawing, billowing outwards. Add chalk-drawn ${iconsText} related to the subject. At the top, in a chalk-written font, is the title "${title}". A chalk-drawn arrow points to the figure with the text "${sharpFact}" next to it. The overall style is a mix of photography and chalk illustration on a worn chalkboard surface.`;
+  
+  console.log('🎨 Generating cover with gemini-3-pro-image...');
   console.log('📝 Prompt:', prompt);
 
   try {
     const client = getGenAI();
     
-    // Use gemini-2.0-flash-exp with generateContent for native image generation
-    // This model supports Russian text in images
+    // Build contents array with reference image and prompt
+    const contents: any[] = [];
+    
+    if (referenceImageBase64) {
+      contents.push({
+        role: 'user',
+        parts: [
+          {
+            inlineData: {
+              mimeType: 'image/jpeg',
+              data: referenceImageBase64
+            }
+          },
+          {
+            text: 'This is the reference style for the cover. Match this exact style:'
+          }
+        ]
+      });
+    }
+    
+    contents.push({
+      role: 'user',
+      parts: [{ text: prompt }]
+    });
+    
+    // Use gemini-3-pro-image for image generation with Russian text support
     const response = await client.models.generateContent({
-      model: 'gemini-2.0-flash-exp',
-      contents: prompt,
+      model: 'gemini-3-pro-image',
+      contents,
       config: {
-        responseModalities: ['Text', 'Image'],
+        responseModalities: ['Image'],
       },
     });
 
