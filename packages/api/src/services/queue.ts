@@ -70,14 +70,14 @@ generationWorker.on('failed', (job, err) => {
   console.error(`Generation job ${job?.id} failed:`, err);
 });
 
-// Cover Worker
+// Cover Worker - now with custom options support
 const coverWorker = new Worker('cover', async (job) => {
-  const { articleId, template } = job.data;
+  const { articleId, template, options } = job.data;
   console.log(`Starting cover generation for article ${articleId}`);
   
   try {
     const { generateCover } = await import('./media/cover');
-    const result = await generateCover(articleId, template);
+    const result = await generateCover(articleId, template, options);
     
     console.log(`Cover generated for article ${articleId}`);
     return result;

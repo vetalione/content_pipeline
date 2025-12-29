@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { researchQueue, generationQueue, coverQueue } from '../services/queue';
 import { PipelineStage } from '@content-pipeline/shared';
+import { getCoverOptionsPreview } from '../services/media/cover';
 
 export const pipelineRouter = Router();
 
@@ -48,16 +49,38 @@ pipelineRouter.post('/:articleId/generate', async (req, res, next) => {
   }
 });
 
-// Start cover generation
+// Get cover options preview (before generating)
+pipelineRouter.get('/:articleId/cover/preview', async (req, res, next) => {
+  try {
+    const { articleId } = req.params;
+    const preview = await getCoverOptionsPreview(articleId);
+    
+    res.json({
+      success: true,
+      data: preview
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Start cover generation with optional custom parameters
 pipelineRouter.post('/:articleId/cover', async (req, res, next) => {
   try {
     const { articleId } = req.params;
-    const { template } = req.body;
+    const { template, heroName, title, colorScheme, icons, sharpFact } = req.body;
     
     await coverQueue.add('cover', {
       articleId,
       stage: PipelineStage.COVER,
-      template
+      template: template || 'default',
+      options: {
+        heroName,
+        title,
+        colorScheme,
+        icons,
+        sharpFact,
+      }
     });
     
     res.json({

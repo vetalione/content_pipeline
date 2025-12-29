@@ -7,6 +7,7 @@ import { PipelineStage, type Article } from '../types';
 import PipelineProgress from '../components/PipelineProgress';
 import ResearchView from '../components/ResearchView';
 import ContentView from '../components/ContentView';
+import CoverView from '../components/CoverView';
 import PublishingView from '../components/PublishingView';
 
 interface ResearchProgress {
@@ -100,16 +101,6 @@ export default function ArticleDetail() {
     }
   };
 
-  const startCoverGeneration = async () => {
-    try {
-      await api.post(`/pipeline/${id}/cover`, { template: 'default' });
-      alert('Создание обложки запущено!');
-      loadArticle();
-    } catch (error) {
-      alert('Ошибка при создании обложки');
-    }
-  };
-
   if (loading) {
     return <div className="flex justify-center items-center h-64">Загрузка...</div>;
   }
@@ -117,6 +108,15 @@ export default function ArticleDetail() {
   if (!article) {
     return <div className="text-center text-gray-500">Статья не найдена</div>;
   }
+
+  // Determine if we should show cover generation
+  const showCoverSection = article.content && (
+    article.currentStage === PipelineStage.GENERATION || 
+    article.currentStage === PipelineStage.COVER ||
+    article.currentStage === PipelineStage.PUBLISHING ||
+    article.currentStage === PipelineStage.COMPLETED ||
+    article.coverImage
+  );
 
   return (
     <div>
@@ -176,7 +176,7 @@ export default function ArticleDetail() {
         {/* Research Results */}
         {article.researchData && (
           <ResearchView 
-            data={article.researchData} 
+            data={article.researchData}
             articleId={article.id}
             onUpdate={loadArticle}
           />
@@ -199,14 +199,13 @@ export default function ArticleDetail() {
         )}
 
         {/* Cover Generation */}
-        {article.currentStage === PipelineStage.GENERATION && article.content && !article.coverImage && (
-          <div className="card">
-            <h2 className="text-xl font-semibold mb-4">Следующий шаг: Создание обложки</h2>
-            <button onClick={startCoverGeneration} className="btn btn-primary flex items-center gap-2">
-              <Play size={20} />
-              Создать обложку
-            </button>
-          </div>
+        {showCoverSection && (
+          <CoverView 
+            articleId={article.id}
+            celebrityName={article.celebrityName}
+            coverImage={article.coverImage}
+            onCoverGenerated={loadArticle}
+          />
         )}
 
         {/* Publishing */}
