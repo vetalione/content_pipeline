@@ -280,12 +280,12 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
     );
 
     if (!response.ok) {
-      const errorData = await response.json();
+      const errorData = await response.json() as any;
       console.error('API Error:', errorData);
       throw new Error(JSON.stringify(errorData.error));
     }
 
-    const data = await response.json();
+    const data = await response.json() as any;
     
     // Extract image from response
     let imageBase64: string | null = null;
