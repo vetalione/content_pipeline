@@ -53,3 +53,4 @@ packages/api/src/services/publishers/sessions/
 test-results/
 playwright-report/
 playwright/.cache/
+.env

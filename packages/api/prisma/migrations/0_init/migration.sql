@@ -1,0 +1,3 @@
+-- Initial schema with cover images versioning
+-- This migration is a baseline for the current production schema
+-- The database already has all required tables and fields
