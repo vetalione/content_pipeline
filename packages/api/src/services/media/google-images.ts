@@ -377,13 +377,13 @@ export async function findFactImage(
   
   if (ruQuery) {
     const [enResults, ruResults] = await Promise.all([
-      searchGoogleImages(enQuery, 4),
-      searchGoogleImages(ruQuery, 3)
+      searchGoogleImages(enQuery, 8),
+      searchGoogleImages(ruQuery, 6)
     ]);
     // English first for international celebrities
     allCandidates = [...enResults, ...ruResults];
   } else {
-    allCandidates = await searchGoogleImages(enQuery, 6);
+    allCandidates = await searchGoogleImages(enQuery, 10);
   }
   
   // Remove duplicates
@@ -395,32 +395,18 @@ export async function findFactImage(
     return null;
   }
 
-  // Use Gemini to validate and pick the best image with overall timeout
+  // Use Gemini to validate and pick the best image - no timeout, thorough checking
   const description = visualSuggestion || factTitle;
   
   try {
-    // 60 second timeout for entire validation process
-    const timeoutPromise = new Promise<null>((resolve) => 
-      setTimeout(() => {
-        console.log(`  ⏰ Image validation timeout - returning first candidate`);
-        resolve(null);
-      }, 60000)
-    );
-    
-    const validationPromise = findBestImage(uniqueCandidates, celebrityName, description);
-    const bestImage = await Promise.race([validationPromise, timeoutPromise]);
-    
-    // If timeout occurred but we have candidates, return first one
-    if (bestImage === null && uniqueCandidates.length > 0) {
-      console.log(`  🔄 Timeout fallback: using first candidate without validation`);
-      return uniqueCandidates[0];
-    }
-    
+    console.log(`  🔍 Starting thorough validation of ${uniqueCandidates.length} candidates (no timeout)...`);
+    const bestImage = await findBestImage(uniqueCandidates, celebrityName, description);
     return bestImage;
   } catch (error) {
     console.error(`  ❌ Image validation error:`, error);
-    // On error, return first candidate without validation
+    // On error, return first candidate as fallback
     if (uniqueCandidates.length > 0) {
+      console.log(`  🔄 Error fallback: using first candidate`);
       return uniqueCandidates[0];
     }
     return null;

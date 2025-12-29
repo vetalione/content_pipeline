@@ -38,32 +38,22 @@ export async function validateImageRelevance(
     const genAI = new GoogleGenerativeAI(apiKey);
     const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
-    // Fetch image as base64 with timeout to prevent hanging
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10 second timeout
-    
+    // Fetch image as base64 (no timeout - let it take the time it needs)
     let imageResponse: Response;
     try {
       imageResponse = await fetch(imageUrl, { 
-        signal: controller.signal,
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
         }
       });
     } catch (fetchError: any) {
-      clearTimeout(timeoutId);
-      if (fetchError.name === 'AbortError') {
-        console.log(`  ⏰ Image fetch timeout: ${imageUrl.substring(0, 60)}...`);
-      } else {
-        console.log(`  ⚠️ Image fetch error: ${fetchError.message}`);
-      }
+      console.log(`  ⚠️ Image fetch error: ${fetchError.message}`);
       return {
         isRelevant: false,
         confidence: 0,
-        reasoning: 'Image fetch failed or timeout'
+        reasoning: 'Image fetch failed'
       };
     }
-    clearTimeout(timeoutId);
     
     if (!imageResponse.ok) {
       // Image not accessible (403, 404, etc.) - skip validation
@@ -98,8 +88,8 @@ export async function validateImageRelevance(
   "reasoning": "краткое объяснение на русском"
 }`;
 
-    // Add timeout for Gemini API call
-    const geminiPromise = model.generateContent([
+    // Call Gemini API without timeout - let it take the time it needs for thorough validation
+    const result = await model.generateContent([
       {
         inlineData: {
           data: base64Image,
@@ -108,13 +98,6 @@ export async function validateImageRelevance(
       },
       { text: prompt }
     ]);
-
-    // 30 second timeout for Gemini API
-    const timeoutPromise = new Promise<never>((_, reject) => 
-      setTimeout(() => reject(new Error('Gemini API timeout after 30s')), 30000)
-    );
-    
-    const result = await Promise.race([geminiPromise, timeoutPromise]);
 
     const response = result.response.text();
     console.log(`🤖 Gemini validation response:`, response.substring(0, 200));
@@ -144,6 +127,7 @@ export async function validateImageRelevance(
 
 /**
  * Find best image from multiple candidates using Gemini validation
+ * Validates ALL images in parallel and picks the best one (no shortcuts)
  * @param imageUrls Array of candidate image URLs
  * @param celebrityName Name of the person
  * @param description What the image should show
@@ -158,46 +142,44 @@ export async function findBestImage(
     return null;
   }
 
-  console.log(`  🔍 Validating ${imageUrls.length} image candidates with Gemini...`);
+  console.log(`  🔍 Validating ALL ${imageUrls.length} image candidates with Gemini (thorough mode)...`);
 
-  // Validate each image
+  // Validate ALL images in parallel - no shortcuts, check everything
   const validations = await Promise.all(
-    imageUrls.map(async (url) => ({
-      url,
-      validation: await validateImageRelevance(url, celebrityName, description)
-    }))
+    imageUrls.map(async (url, index) => {
+      console.log(`  📸 [${index + 1}/${imageUrls.length}] Checking: ${url.substring(0, 70)}...`);
+      const validation = await validateImageRelevance(url, celebrityName, description);
+      console.log(`  📊 [${index + 1}/${imageUrls.length}] Result: ${validation.isRelevant ? '✅' : '❌'} confidence=${validation.confidence}% - ${validation.reasoning}`);
+      return { url, validation };
+    })
   );
 
-  // Filter relevant images (confidence >= 70)
-  const relevantImages = validations
-    .filter(v => v.validation.isRelevant && v.validation.confidence >= 70)
+  // Sort by confidence descending
+  const sortedByConfidence = validations
+    .filter(v => v.validation.confidence > 0) // Remove failed fetches
     .sort((a, b) => b.validation.confidence - a.validation.confidence);
 
-  if (relevantImages.length > 0) {
-    const best = relevantImages[0];
-    console.log(`  ✅ Best image: ${best.url.substring(0, 80)}... (confidence: ${best.validation.confidence}%)`);
-    return best.url;
+  if (sortedByConfidence.length === 0) {
+    console.log(`  ❌ All validations failed (fetch errors)`);
+    return null;
   }
 
-  // If no highly relevant images, take the best available (if confidence > 50)
-  const acceptable = validations
-    .filter(v => v.validation.confidence > 50)
-    .sort((a, b) => b.validation.confidence - a.validation.confidence);
+  // Log top 3 candidates
+  console.log(`  🏆 Top candidates:`);
+  sortedByConfidence.slice(0, 3).forEach((v, i) => {
+    console.log(`     ${i + 1}. [${v.validation.confidence}%] ${v.url.substring(0, 60)}...`);
+  });
 
-  if (acceptable.length > 0) {
-    const best = acceptable[0];
-    console.log(`  ⚠️ Acceptable image: ${best.url.substring(0, 80)}... (confidence: ${best.validation.confidence}%)`);
-    return best.url;
+  // Return best match (highest confidence)
+  const best = sortedByConfidence[0];
+  
+  if (best.validation.confidence >= 70) {
+    console.log(`  ✅ EXCELLENT match found (${best.validation.confidence}%): ${best.validation.reasoning}`);
+  } else if (best.validation.confidence >= 50) {
+    console.log(`  ⚠️ ACCEPTABLE match found (${best.validation.confidence}%): ${best.validation.reasoning}`);
+  } else {
+    console.log(`  ⚠️ WEAK match (${best.validation.confidence}%) - best available: ${best.validation.reasoning}`);
   }
 
-  // Last resort: if validation failed for all images (errors), take first accessible one
-  const accessibleImages = validations.filter(v => v.validation.confidence > 0);
-  if (accessibleImages.length > 0) {
-    const fallback = accessibleImages[0];
-    console.log(`  🔄 Fallback: using first accessible image (validation failed)`);
-    return fallback.url;
-  }
-
-  console.log(`  ❌ No relevant images found`);
-  return null;
+  return best.url;
 }
