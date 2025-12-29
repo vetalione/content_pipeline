@@ -321,6 +321,7 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
     };
   } catch (error: any) {
     console.error('❌ Gemini gemini-3-pro-image error:', error);
+    return {
       success: false,
       error: error.message || 'Failed to generate cover image',
     };
