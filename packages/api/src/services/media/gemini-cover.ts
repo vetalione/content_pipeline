@@ -238,33 +238,33 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
       throw new Error('GEMINI_API_KEY environment variable is not set');
     }
 
-    // Build request body for gemini-3-pro-image-preview with image generation config
+    // Build request body for gemini-3-pro-image-preview with correct format
     const requestBody: any = {
       contents: [
         {
-          role: 'user',
           parts: [
             { text: prompt }
           ]
         }
       ],
-      // Image generation configuration
-      image_config: {
-        aspect_ratio: '16:9',
-        image_size: '4K'
-      },
-      // Use google_search for grounded, factual image generation
       tools: [
-        { google_search: {} }
-      ]
+        { googleSearch: {} }
+      ],
+      generationConfig: {
+        imageConfig: {
+          aspectRatio: '16:9',
+          imageSize: '4K'
+        }
+      }
     };
 
     // Call gemini-3-pro-image-preview REST API for 4K image generation
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent`,
       {
         method: 'POST',
         headers: {
+          'x-goog-api-key': apiKey,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(requestBody),
