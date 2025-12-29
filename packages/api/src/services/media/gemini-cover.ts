@@ -215,37 +215,21 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
 
   const iconsText = icons.join(', ');
   
-  // Load reference image (Adele.jpg) as example
-  let referenceImageBase64 = '';
-  
-  const possiblePaths = [
-    path.join(process.cwd(), 'Adele.jpg'),
-    path.join(process.cwd(), 'dist', 'Adele.jpg'),
-    path.join(process.cwd(), '..', '..', 'Adele.jpg'),
-    '/app/Adele.jpg',
-    '/app/dist/Adele.jpg',
-    './Adele.jpg'
-  ];
-  
-  for (const referenceImagePath of possiblePaths) {
-    try {
-      const imageBuffer = await fs.readFile(referenceImagePath);
-      referenceImageBase64 = imageBuffer.toString('base64');
-      console.log('✅ Loaded reference image:', referenceImagePath);
-      break;
-    } catch (err) {
-      // Try next path
-    }
-  }
-  
-  if (!referenceImageBase64) {
-    console.warn('⚠️ Could not load reference image from any location, continuing without it');
-  }
-
   // Prompt with Russian text for title and sharp fact
-  const prompt = `Create a cover image in EXACTLY this style (see reference image). A realistic photo collage cover art. The central figure is a cutout portrait of ${heroName} in their prime, looking directly at the viewer with a characteristic expression. This portrait is superimposed over a dark, textured chalkboard background covered with faint chalk scratches and scrawls. Behind the figure's silhouette is a vibrant, textured ${colorScheme} cloud or aura, rendered in a style that mimics a chalk or pastel drawing, billowing outwards. Add chalk-drawn ${iconsText} related to the subject. At the top, in a chalk-written font, is the title "${title}". A chalk-drawn arrow points to the figure with the text "${sharpFact}" next to it. The overall style is a mix of photography and chalk illustration on a worn chalkboard surface.`;
+  const prompt = `Create a professional cover image for a biography article about ${heroName}. Design specifications:
+- Style: Realistic photo collage cover art with dramatic visual impact
+- Central element: Professional cutout portrait of ${heroName} in their prime, making direct eye contact with viewer
+- Background: Dark, textured chalkboard with chalk scratches and artistic marks
+- Visual accent: Vibrant ${colorScheme} cloud/aura effect behind the figure using chalk/pastel style
+- Icons: Include ${iconsText} as chalk-drawn elements related to ${heroName}'s achievements
+- Text elements:
+  * Title at top in chalk font: "${title}"
+  * Arrow pointing to figure with annotation: "${sharpFact}"
+- Final style: Blend of photography and chalk illustration on aged chalkboard
+- Quality: Sharp, legible text and diagrams, professional finish
+- Aspect ratio: 16:9, resolution: 4K`;
   
-  console.log('🎨 Generating cover with gemini-3-pro-image via REST API...');
+  console.log('🎨 Generating cover with gemini-3-pro-image-preview via REST API...');
   console.log('📝 Prompt:', prompt);
 
   try {
@@ -254,37 +238,30 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
       throw new Error('GEMINI_API_KEY environment variable is not set');
     }
 
-    // Build request body for gemini-3-pro-image
+    // Build request body for gemini-3-pro-image-preview with image generation config
     const requestBody: any = {
       contents: [
         {
           role: 'user',
-          parts: []
+          parts: [
+            { text: prompt }
+          ]
         }
+      ],
+      // Image generation configuration
+      image_config: {
+        aspect_ratio: '16:9',
+        image_size: '4K'
+      },
+      // Use google_search for grounded, factual image generation
+      tools: [
+        { google_search: {} }
       ]
     };
 
-    // Add reference image if available
-    if (referenceImageBase64) {
-      requestBody.contents[0].parts.push({
-        inlineData: {
-          mimeType: 'image/jpeg',
-          data: referenceImageBase64
-        }
-      });
-      requestBody.contents[0].parts.push({
-        text: 'This is the reference style for the cover. Match this exact style and quality:'
-      });
-    }
-
-    // Add main prompt
-    requestBody.contents[0].parts.push({
-      text: prompt
-    });
-
-    // Call gemini-2.0-flash-exp REST API (supports multimodal + Russian text)
+    // Call gemini-3-pro-image-preview REST API for 4K image generation
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {
@@ -296,7 +273,7 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
 
     if (!response.ok) {
       const errorData = await response.json() as any;
-      console.error('API Error:', errorData);
+      console.error('❌ Gemini 3 Pro Image API Error:', errorData);
       throw new Error(JSON.stringify(errorData.error));
     }
 
@@ -335,7 +312,7 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
       imagePath: filePath,
     };
   } catch (error: any) {
-    console.error('❌ Gemini gemini-3-pro-image error:', error);
+    console.error('❌ Gemini 3 Pro Image generation error:', error);
     return {
       success: false,
       error: error.message || 'Failed to generate cover image',
