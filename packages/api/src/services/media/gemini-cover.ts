@@ -197,7 +197,7 @@ function getRandomColors(): string {
 }
 
 /**
- * Generate cover image using Gemini with native image generation (supports Russian text)
+ * Generate cover image using gemini-3-pro-image via REST API (best quality + Russian support)
  */
 export async function generateCoverImage(options: CoverGenerationOptions): Promise<{
   success: boolean;
@@ -215,7 +215,7 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
 
   const iconsText = icons.join(', ');
   
-// Load reference image (Adele.jpg) as example
+  // Load reference image (Adele.jpg) as example
   const referenceImagePath = path.join(process.cwd(), 'Adele.jpg');
   let referenceImageBase64 = '';
   
@@ -230,61 +230,77 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
   // Prompt with Russian text for title and sharp fact
   const prompt = `Create a cover image in EXACTLY this style (see reference image). A realistic photo collage cover art. The central figure is a cutout portrait of ${heroName} in their prime, looking directly at the viewer with a characteristic expression. This portrait is superimposed over a dark, textured chalkboard background covered with faint chalk scratches and scrawls. Behind the figure's silhouette is a vibrant, textured ${colorScheme} cloud or aura, rendered in a style that mimics a chalk or pastel drawing, billowing outwards. Add chalk-drawn ${iconsText} related to the subject. At the top, in a chalk-written font, is the title "${title}". A chalk-drawn arrow points to the figure with the text "${sharpFact}" next to it. The overall style is a mix of photography and chalk illustration on a worn chalkboard surface.`;
   
-  console.log('🎨 Generating cover with gemini-3-pro-image...');
+  console.log('🎨 Generating cover with gemini-3-pro-image via REST API...');
   console.log('📝 Prompt:', prompt);
 
   try {
-    const client = getGenAI();
-    
-    // Build contents array with reference image and prompt
-    const contents: any[] = [];
-    
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error('GEMINI_API_KEY environment variable is not set');
+    }
+
+    // Build request body for gemini-3-pro-image
+    const requestBody: any = {
+      contents: [
+        {
+          role: 'user',
+          parts: []
+        }
+      ]
+    };
+
+    // Add reference image if available
     if (referenceImageBase64) {
-      contents.push({
-        role: 'user',
-        parts: [
-          {
-            inlineData: {
-              mimeType: 'image/jpeg',
-              data: referenceImageBase64
-            }
-          },
-          {
-            text: 'This is the reference style for the cover. Match this exact style:'
-          }
-        ]
+      requestBody.contents[0].parts.push({
+        inlineData: {
+          mimeType: 'image/jpeg',
+          data: referenceImageBase64
+        }
+      });
+      requestBody.contents[0].parts.push({
+        text: 'This is the reference style for the cover. Match this exact style and quality:'
       });
     }
-    
-    contents.push({
-      role: 'user',
-      parts: [{ text: prompt }]
-    });
-    
-    // Use gemini-3-pro-image for image generation with Russian text support
-    const response = await client.models.generateContent({
-      model: 'gemini-3-pro-image',
-      contents,
-      config: {
-        responseModalities: ['Image'],
-      },
+
+    // Add main prompt
+    requestBody.contents[0].parts.push({
+      text: prompt
     });
 
-    // Find image in response parts
+    // Call gemini-3-pro-image REST API
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent?key=${apiKey}`,
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      }
+    );
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      console.error('API Error:', errorData);
+      throw new Error(JSON.stringify(errorData.error));
+    }
+
+    const data = await response.json();
+    
+    // Extract image from response
     let imageBase64: string | null = null;
     
-    if (response.candidates && response.candidates[0]?.content?.parts) {
-      for (const part of response.candidates[0].content.parts) {
-        if (part.inlineData && part.inlineData.mimeType?.startsWith('image/')) {
-          imageBase64 = part.inlineData.data || null;
+    if (data.candidates && data.candidates[0]?.content?.parts) {
+      for (const part of data.candidates[0].content.parts) {
+        if (part.inlineData?.data) {
+          imageBase64 = part.inlineData.data;
           break;
         }
       }
     }
 
     if (!imageBase64) {
-      // Log response for debugging
-      console.log('Response structure:', JSON.stringify(response, null, 2).substring(0, 1000));
+      console.error('Response structure:', JSON.stringify(data, null, 2).substring(0, 1000));
       throw new Error('No image in response');
     }
     
@@ -304,8 +320,7 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
       imagePath: filePath,
     };
   } catch (error: any) {
-    console.error('❌ Gemini Imagen error:', error);
-    return {
+    console.error('❌ Gemini gemini-3-pro-image error:', error);
       success: false,
       error: error.message || 'Failed to generate cover image',
     };
