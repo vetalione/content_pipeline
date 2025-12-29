@@ -38,7 +38,10 @@ export interface Article {
   // Generated content
   content?: ArticleContent;
   
-  // Cover image
+  // Cover images (supports multiple versions)
+  coverImages?: CoverImage[];
+  
+  // Backwards compatibility
   coverImage?: CoverImage;
   
   // Publishing info
@@ -138,9 +141,11 @@ export interface ArticleSection {
 export interface CoverImage {
   id: string;
   originalImageUrl: string;
-  processedImageUrl: string;
+  processedImageUrl?: string;
   localPath: string;
   template: string;
+  version?: number;
+  isSelected?: boolean;
   generatedAt: Date;
 }
 

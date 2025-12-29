@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { ArrowLeft, Play } from 'lucide-react';
+import { ArrowLeft, Play, Trash2 } from 'lucide-react';
 import { io } from 'socket.io-client';
 import { api } from '../lib/api';
 import { PipelineStage, type Article } from '../types';
@@ -101,6 +101,19 @@ export default function ArticleDetail() {
     }
   };
 
+  const deleteArticle = async () => {
+    if (!confirm('Удалить статью полностью? Это действие нельзя отменить.')) return;
+    
+    try {
+      await api.delete(`/articles/${id}`);
+      alert('Статья удалена');
+      navigate('/');
+    } catch (error) {
+      console.error('Failed to delete article:', error);
+      alert('Ошибка при удалении статьи');
+    }
+  };
+
   if (loading) {
     return <div className="flex justify-center items-center h-64">Загрузка...</div>;
   }
@@ -115,20 +128,31 @@ export default function ArticleDetail() {
     article.currentStage === PipelineStage.COVER ||
     article.currentStage === PipelineStage.PUBLISHING ||
     article.currentStage === PipelineStage.COMPLETED ||
-    article.coverImage
+    ((article as any).coverImages && (article as any).coverImages.length > 0)
   );
 
   return (
     <div>
       {/* Header */}
       <div className="mb-8">
-        <button
-          onClick={() => navigate('/')}
-          className="flex items-center gap-2 text-gray-600 hover:text-gray-900 mb-4"
-        >
-          <ArrowLeft size={20} />
-          Назад к статьям
-        </button>
+        <div className="flex justify-between items-start mb-4">
+          <button
+            onClick={() => navigate('/')}
+            className="flex items-center gap-2 text-gray-600 hover:text-gray-900"
+          >
+            <ArrowLeft size={20} />
+            Назад к статьям
+          </button>
+          
+          <button
+            onClick={deleteArticle}
+            className="flex items-center gap-2 text-red-600 hover:text-red-800 hover:bg-red-50 px-3 py-2 rounded transition"
+            title="Удалить статью"
+          >
+            <Trash2 size={18} />
+            Удалить
+          </button>
+        </div>
         
         <h1 className="text-3xl font-bold mb-2">{article.celebrityName}</h1>
         <p className="text-gray-600">ID: {article.id}</p>
@@ -203,13 +227,13 @@ export default function ArticleDetail() {
           <CoverView 
             articleId={article.id}
             celebrityName={article.celebrityName}
-            coverImage={article.coverImage}
+            coverImages={(article as any).coverImages || []}
             onCoverGenerated={loadArticle}
           />
         )}
 
         {/* Publishing */}
-        {article.coverImage && (
+        {(article as any).coverImages && (article as any).coverImages.length > 0 && (
           <PublishingView articleId={article.id} publications={article.publications || []} />
         )}
       </div>

@@ -72,47 +72,27 @@ export async function generateCover(articleId: string, template: string, options
   // Create data URL for storage
   const imageUrl = `data:image/jpeg;base64,${result.imageBase64}`;
 
-  // Save or update cover image in database
-  const existingCover = await prisma.coverImage.findFirst({
-    where: { articleId }
+  // Get current version number (increment from latest)
+  const latestCover = await prisma.coverImage.findFirst({
+    where: { articleId },
+    orderBy: { version: 'desc' }
+  });
+  
+  const nextVersion = latestCover ? latestCover.version + 1 : 1;
+
+  // Always create a new cover version (never update existing)
+  const coverImage = await prisma.coverImage.create({
+    data: {
+      articleId,
+      originalImageUrl: imageUrl,
+      localPath: result.imagePath || `/covers/${articleId}_v${nextVersion}.jpg`,
+      template,
+      version: nextVersion,
+      isSelected: false // User will manually select the best one
+    }
   });
 
-  let coverImage;
-  if (existingCover) {
-    // Update existing cover
-    coverImage = await prisma.coverImage.update({
-      where: { id: existingCover.id },
-      data: {
-        originalImageUrl: imageUrl,
-        localPath: result.imagePath || `/covers/${articleId}.jpg`,
-        template
-      }
-    });
-  } else {
-    // Create new cover
-    coverImage = await prisma.coverImage.create({
-      data: {
-        articleId,
-        originalImageUrl: imageUrl,
-        localPath: result.imagePath || `/covers/${articleId}.jpg`,
-        template
-      }
-    });
-  }
-  
-  // Update article stage to PUBLISHING (only if not already there or beyond)
-  const currentStage = article.currentStage;
-  if (currentStage === PipelineStage.GENERATION || currentStage === PipelineStage.COVER) {
-    await prisma.article.update({
-      where: { id: articleId },
-      data: {
-        currentStage: PipelineStage.PUBLISHING,
-        updatedAt: new Date()
-      }
-    });
-  }
-  
-  console.log(`✅ Cover generated for ${article.celebrityName}`);
+  console.log(`✅ Cover version ${nextVersion} generated for ${article.celebrityName}`);
   
   return {
     success: true,

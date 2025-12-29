@@ -21,7 +21,10 @@ articlesRouter.get('/', async (req, res, next) => {
       prisma.article.findMany({
         where,
         include: {
-          coverImage: true,
+          coverImages: {
+            orderBy: { generatedAt: 'desc' },
+            take: 1 // Only latest for list view
+          },
           publications: true
         },
         orderBy: { createdAt: 'desc' },
@@ -50,7 +53,9 @@ articlesRouter.get('/:id', async (req, res, next) => {
     const article = await prisma.article.findUnique({
       where: { id: req.params.id },
       include: {
-        coverImage: true,
+        coverImages: {
+          orderBy: { generatedAt: 'desc' }
+        },
         publications: true
       }
     });
@@ -105,7 +110,9 @@ articlesRouter.patch('/:id', async (req, res, next) => {
       where: { id },
       data: updates,
       include: {
-        coverImage: true,
+        coverImages: {
+          orderBy: { generatedAt: 'desc' }
+        },
         publications: true
       }
     });
@@ -119,11 +126,53 @@ articlesRouter.patch('/:id', async (req, res, next) => {
 // Delete article
 articlesRouter.delete('/:id', async (req, res, next) => {
   try {
-    await prisma.article.delete({
-      where: { id: req.params.id }
+    const { id } = req.params;
+    
+    // Get article with all cover images to delete files
+    const article = await prisma.article.findUnique({
+      where: { id },
+      include: {
+        coverImages: true
+      }
     });
     
-    res.json({ success: true, message: 'Article deleted' });
+    if (!article) {
+      return res.status(404).json({
+        success: false,
+        error: 'Article not found'
+      });
+    }
+    
+    // Delete all cover image files from disk
+    const fs = await import('fs/promises');
+    const path = await import('path');
+    
+    for (const cover of article.coverImages) {
+      try {
+        // Delete the file if it exists
+        const filePath = cover.localPath.startsWith('/') 
+          ? cover.localPath 
+          : path.join(process.cwd(), cover.localPath);
+        
+        await fs.unlink(filePath);
+        console.log(`🗑️ Deleted cover file: ${filePath}`);
+      } catch (err) {
+        console.warn(`⚠️ Could not delete cover file ${cover.localPath}:`, err);
+      }
+    }
+    
+    // Delete article (this will cascade delete covers and publications)
+    await prisma.article.delete({
+      where: { id }
+    });
+    
+    console.log(`✅ Deleted article ${id} with ${article.coverImages.length} cover(s)`);
+    
+    res.json({ 
+      success: true, 
+      message: 'Article and all associated data deleted',
+      deletedCovers: article.coverImages.length
+    });
   } catch (error) {
     next(error);
   }

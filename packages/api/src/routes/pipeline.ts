@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { researchQueue, generationQueue, coverQueue } from '../services/queue';
 import { PipelineStage } from '@content-pipeline/shared';
 import { getCoverOptionsPreview } from '../services/media/cover';
+import { prisma } from '../lib/db';
 
 export const pipelineRouter = Router();
 
@@ -116,6 +117,77 @@ pipelineRouter.get('/:articleId/status', async (req, res, next) => {
       data: {
         jobs: jobsWithState
       }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Select a specific cover version as the main one
+pipelineRouter.post('/:articleId/cover/:coverId/select', async (req, res, next) => {
+  try {
+    const { articleId, coverId } = req.params;
+    
+    // Deselect all other covers for this article
+    await prisma.coverImage.updateMany({
+      where: { articleId },
+      data: { isSelected: false }
+    });
+    
+    // Select this cover
+    const selectedCover = await prisma.coverImage.update({
+      where: { id: coverId },
+      data: { isSelected: true }
+    });
+    
+    res.json({
+      success: true,
+      message: 'Cover selected',
+      data: selectedCover
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete a specific cover version
+pipelineRouter.delete('/:articleId/cover/:coverId', async (req, res, next) => {
+  try {
+    const { coverId } = req.params;
+    
+    const cover = await prisma.coverImage.findUnique({
+      where: { id: coverId }
+    });
+    
+    if (!cover) {
+      return res.status(404).json({
+        success: false,
+        error: 'Cover not found'
+      });
+    }
+    
+    // Delete file from disk
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const filePath = cover.localPath.startsWith('/') 
+        ? cover.localPath 
+        : path.join(process.cwd(), cover.localPath);
+      
+      await fs.unlink(filePath);
+      console.log(`🗑️ Deleted cover file: ${filePath}`);
+    } catch (err) {
+      console.warn(`⚠️ Could not delete cover file ${cover.localPath}:`, err);
+    }
+    
+    // Delete from database
+    await prisma.coverImage.delete({
+      where: { id: coverId }
+    });
+    
+    res.json({
+      success: true,
+      message: 'Cover deleted'
     });
   } catch (error) {
     next(error);

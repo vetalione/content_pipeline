@@ -90,9 +90,21 @@ export async function performPerplexityResearch(
             'newspapers.com',
             'wikipedia.org',
             'britannica.com'
-          ], // Focus on archival sources
+          ], // Focus on archival sources for TEXT search
           return_citations: true, // Get source URLs
           return_images: true, // Request images from Perplexity
+          // Image filtering - get only quality historical photos
+          image_domain_filter: [
+            'wikimedia.org',
+            'commons.wikimedia.org',
+            'archive.org',
+            'wikipedia.org',
+            '-gettyimages.com',
+            '-shutterstock.com',
+            '-pinterest.com',
+            '-istockphoto.com'
+          ],
+          image_format_filter: ['jpg', 'png'], // Only jpg and png, no webp
           search_recency_filter: null // No recency filter for historical research
         })
       }),
