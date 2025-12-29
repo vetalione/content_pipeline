@@ -2,8 +2,20 @@ import { GoogleGenAI } from '@google/genai';
 import { promises as fs } from 'fs';
 import path from 'path';
 
-// Initialize Gemini client
-const genAI = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY || '' });
+// Lazy initialization - will be created on first use with actual env var value
+let genAI: GoogleGenAI | null = null;
+
+function getGenAI(): GoogleGenAI {
+  if (!genAI) {
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error('GEMINI_API_KEY environment variable is not set');
+    }
+    console.log('🔑 Initializing Gemini client with API key:', apiKey.substring(0, 10) + '...');
+    genAI = new GoogleGenAI({ apiKey });
+  }
+  return genAI;
+}
 
 // Profession to icons mapping
 const PROFESSION_ICONS: Record<string, string[]> = {
@@ -209,7 +221,8 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
   console.log('📝 Prompt:', prompt);
 
   try {
-    const response = await genAI.models.generateImages({
+    const client = getGenAI();
+    const response = await client.models.generateImages({
       model: 'imagen-3.0-generate-002',
       prompt: prompt,
       config: {
