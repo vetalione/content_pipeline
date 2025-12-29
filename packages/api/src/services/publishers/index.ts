@@ -7,7 +7,7 @@ import { prisma } from '../../lib/db';
 export async function publishArticle(articleId: string, platform: Platform) {
   const article = await prisma.article.findUnique({
     where: { id: articleId },
-    include: { coverImage: true }
+    include: { coverImages: true }
   });
 
   if (!article) throw new Error('Article not found');

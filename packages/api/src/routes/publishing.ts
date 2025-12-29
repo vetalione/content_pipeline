@@ -15,7 +15,7 @@ publishingRouter.post('/:articleId/publish', async (req, res, next) => {
     
     const article = await prisma.article.findUnique({
       where: { id: articleId },
-      include: { coverImage: true }
+      include: { coverImages: true }
     });
     
     if (!article) {
