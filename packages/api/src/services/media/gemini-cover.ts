@@ -216,15 +216,30 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
   const iconsText = icons.join(', ');
   
   // Load reference image (Adele.jpg) as example
-  const referenceImagePath = path.join(process.cwd(), 'Adele.jpg');
   let referenceImageBase64 = '';
   
-  try {
-    const imageBuffer = await fs.readFile(referenceImagePath);
-    referenceImageBase64 = imageBuffer.toString('base64');
-    console.log('✅ Loaded reference image:', referenceImagePath);
-  } catch (err) {
-    console.warn('⚠️ Could not load reference image, continuing without it:', err);
+  const possiblePaths = [
+    path.join(process.cwd(), 'Adele.jpg'),
+    path.join(process.cwd(), 'dist', 'Adele.jpg'),
+    path.join(process.cwd(), '..', '..', 'Adele.jpg'),
+    '/app/Adele.jpg',
+    '/app/dist/Adele.jpg',
+    './Adele.jpg'
+  ];
+  
+  for (const referenceImagePath of possiblePaths) {
+    try {
+      const imageBuffer = await fs.readFile(referenceImagePath);
+      referenceImageBase64 = imageBuffer.toString('base64');
+      console.log('✅ Loaded reference image:', referenceImagePath);
+      break;
+    } catch (err) {
+      // Try next path
+    }
+  }
+  
+  if (!referenceImageBase64) {
+    console.warn('⚠️ Could not load reference image from any location, continuing without it');
   }
 
   // Prompt with Russian text for title and sharp fact
@@ -267,9 +282,9 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
       text: prompt
     });
 
-    // Call gemini-3-pro-image REST API
+    // Call gemini-2.0-flash-exp REST API (supports multimodal + Russian text)
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image:generateContent?key=${apiKey}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash-exp:generateContent?key=${apiKey}`,
       {
         method: 'POST',
         headers: {
