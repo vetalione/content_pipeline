@@ -192,7 +192,8 @@ async function processWithConcurrency<T, R>(
 export async function findBestImage(
   imageUrls: string[],
   celebrityName: string,
-  description: string
+  description: string,
+  onProgress?: (progress: { stage: string; current: number; total: number; confidence?: number }) => void
 ): Promise<string | null> {
   if (imageUrls.length === 0) {
     return null;
@@ -200,6 +201,8 @@ export async function findBestImage(
 
   console.log(`  🔍 Validating ${imageUrls.length} candidates (max ${MAX_CONCURRENT_VALIDATIONS} parallel, early-exit at ${EARLY_EXIT_THRESHOLD}%)...`);
 
+  let processedCount = 0;
+  
   const { results, earlyExitResult } = await processWithConcurrency(
     imageUrls,
     async (url, index) => {
@@ -207,6 +210,18 @@ export async function findBestImage(
       console.log(`  📸 [${index + 1}/${imageUrls.length}] ${shortUrl}`);
       
       const validation = await validateImageRelevance(url, celebrityName, description);
+      
+      processedCount++;
+      
+      // Report progress
+      if (onProgress) {
+        onProgress({
+          stage: 'validating',
+          current: processedCount,
+          total: imageUrls.length,
+          confidence: validation.confidence
+        });
+      }
       
       const icon = validation.confidence >= EARLY_EXIT_THRESHOLD ? '🎯' :
                    validation.confidence >= 70 ? '✅' :
@@ -222,6 +237,14 @@ export async function findBestImage(
   // If early exit found a great match, use it
   if (earlyExitResult) {
     console.log(`  ✅ Using early-exit match (${earlyExitResult.validation.confidence}%)`);
+    if (onProgress) {
+      onProgress({
+        stage: 'found',
+        current: imageUrls.length,
+        total: imageUrls.length,
+        confidence: earlyExitResult.validation.confidence
+      });
+    }
     return earlyExitResult.url;
   }
 

@@ -1,7 +1,8 @@
 import { Router } from 'express';
 import { prisma } from '../lib/db';
 import { Article, ArticleStatus, PipelineStage } from '@content-pipeline/shared';
-import { searchGoogleImages } from '../services/media/google-images';
+import { searchGoogleImages, findFactImage } from '../services/media/google-images';
+import { getIO } from '../lib/socket';
 
 export const articlesRouter = Router();
 
@@ -253,6 +254,130 @@ articlesRouter.post('/:id/facts/:factId/regenerate-image', async (req, res, next
     
   } catch (error) {
     console.error('Image regeneration error:', error);
+    next(error);
+  }
+});
+
+// Find image for a specific fact (with WebSocket progress)
+articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
+  try {
+    const { id: articleId, factId } = req.params;
+    
+    // Get article with research data
+    const article = await prisma.article.findUnique({
+      where: { id: articleId }
+    });
+    
+    if (!article || !article.researchData) {
+      return res.status(404).json({ success: false, message: 'Article or research data not found' });
+    }
+    
+    const researchData = article.researchData as any;
+    const factIndex = researchData.facts?.findIndex((f: any) => f.id === factId);
+    
+    if (factIndex === -1 || factIndex === undefined) {
+      return res.status(404).json({ success: false, message: 'Fact not found' });
+    }
+    
+    const fact = researchData.facts[factIndex];
+    
+    // Emit progress: starting
+    const io = getIO();
+    io.emit('image-search-progress', {
+      articleId,
+      factId,
+      status: 'searching',
+      progress: 10,
+      message: 'Поиск изображений в Google и Brave...'
+    });
+    
+    console.log(`🔍 Finding image for fact "${fact.title}"`);
+    
+    // Use full findFactImage with Gemini validation
+    const imageUrl = await findFactImage(
+      article.celebrityName,
+      fact.title,
+      fact.year,
+      fact.visualSuggestion,
+      // Progress callback
+      (progress: { stage: string; current: number; total: number; confidence?: number }) => {
+        io.emit('image-search-progress', {
+          articleId,
+          factId,
+          status: progress.stage,
+          progress: Math.round((progress.current / progress.total) * 100),
+          current: progress.current,
+          total: progress.total,
+          confidence: progress.confidence,
+          message: progress.stage === 'validating' 
+            ? `Проверка изображения ${progress.current}/${progress.total}...`
+            : progress.stage === 'found'
+            ? `Найдено! Уверенность: ${progress.confidence}%`
+            : 'Поиск...'
+        });
+      }
+    );
+    
+    if (!imageUrl) {
+      io.emit('image-search-progress', {
+        articleId,
+        factId,
+        status: 'not-found',
+        progress: 100,
+        message: 'Изображение не найдено'
+      });
+      
+      return res.status(404).json({ 
+        success: false, 
+        message: 'No suitable image found' 
+      });
+    }
+    
+    // Update fact with new image
+    researchData.facts[factIndex].imageUrl = imageUrl;
+    
+    await prisma.article.update({
+      where: { id: articleId },
+      data: {
+        researchData: researchData as any,
+        updatedAt: new Date()
+      }
+    });
+    
+    // Emit progress: complete
+    io.emit('image-search-progress', {
+      articleId,
+      factId,
+      status: 'complete',
+      progress: 100,
+      message: 'Изображение найдено и сохранено!'
+    });
+    
+    console.log(`✅ Found and saved image for fact "${fact.title}": ${imageUrl}`);
+    
+    res.json({ 
+      success: true, 
+      data: { 
+        factId,
+        imageUrl 
+      } 
+    });
+    
+  } catch (error) {
+    console.error('Image search error:', error);
+    
+    // Emit error
+    try {
+      const io = getIO();
+      io.emit('image-search-progress', {
+        articleId: req.params.id,
+        factId: req.params.factId,
+        status: 'error',
+        progress: 0,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    } catch {}
+    
     next(error);
   }
 });

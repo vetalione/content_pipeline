@@ -91,4 +91,14 @@ export function emitResearchError(articleId: string, error: string) {
   console.log(`❌ Research error for ${articleId}:`, error);
 }
 
+/**
+ * Get Socket.IO instance
+ */
+export function getIO(): SocketServer {
+  if (!io) {
+    throw new Error('Socket.IO not initialized');
+  }
+  return io;
+}
+
 export { io };

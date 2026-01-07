@@ -322,13 +322,14 @@ function isEnglishName(name: string): boolean {
 /**
  * Find image for a specific biography fact
  * Constructs search query from fact details and validates with Gemini
- * Uses Google as primary source, Bing as backup
+ * Uses Google as primary source, Brave as backup
  */
 export async function findFactImage(
   celebrityName: string,
   factTitle: string,
   factYear?: number,
-  visualSuggestion?: string
+  visualSuggestion?: string,
+  onProgress?: (progress: { stage: string; current: number; total: number; confidence?: number }) => void
 ): Promise<string | null> {
   // Always translate to English using dictionary + transliteration
   const englishName = translateCelebrityName(celebrityName);
@@ -375,25 +376,29 @@ export async function findFactImage(
     console.log(`  🔎 Russian query: "${ruQuery}"`);
   }
   
-  // ===== SEARCH PHASE 1: Google (primary source) =====
+  // ===== SEARCH PHASE: Parallel Google + Brave =====
+  // Search both sources in parallel for better coverage and rare images
   let allCandidates: string[] = [];
   
-  if (ruQuery) {
-    const [enResults, ruResults] = await Promise.all([
-      searchGoogleImages(enQuery, 6),
-      searchGoogleImages(ruQuery, 4)
-    ]);
-    allCandidates = [...enResults, ...ruResults];
-  } else {
-    allCandidates = await searchGoogleImages(enQuery, 8);
-  }
+  console.log(`  🔍 Searching Google + Brave in parallel...`);
   
-  // ===== SEARCH PHASE 2: Brave (backup source) =====
-  // Add Brave results if we have few candidates
-  if (allCandidates.length < 6) {
-    console.log(`  🦁 Google found only ${allCandidates.length} images, adding Brave backup...`);
-    const braveResults = await searchBraveImages(enQuery, 6);
-    allCandidates = [...allCandidates, ...braveResults];
+  if (ruQuery) {
+    // Parallel search: Google EN, Google RU, Brave EN
+    const [googleEnResults, googleRuResults, braveResults] = await Promise.all([
+      searchGoogleImages(enQuery, 5),
+      searchGoogleImages(ruQuery, 4),
+      searchBraveImages(enQuery, 5)
+    ]);
+    console.log(`  📊 Results: Google EN=${googleEnResults.length}, Google RU=${googleRuResults.length}, Brave=${braveResults.length}`);
+    allCandidates = [...googleEnResults, ...googleRuResults, ...braveResults];
+  } else {
+    // Parallel search: Google + Brave
+    const [googleResults, braveResults] = await Promise.all([
+      searchGoogleImages(enQuery, 6),
+      searchBraveImages(enQuery, 5)
+    ]);
+    console.log(`  📊 Results: Google=${googleResults.length}, Brave=${braveResults.length}`);
+    allCandidates = [...googleResults, ...braveResults];
   }
   
   // Remove duplicates
@@ -410,7 +415,13 @@ export async function findFactImage(
   
   try {
     console.log(`  🔍 Starting optimized validation (early-exit at 85% confidence)...`);
-    const bestImage = await findBestImage(uniqueCandidates, celebrityName, description);
+    
+    // Report search complete, starting validation
+    if (onProgress) {
+      onProgress({ stage: 'validating', current: 0, total: uniqueCandidates.length });
+    }
+    
+    const bestImage = await findBestImage(uniqueCandidates, celebrityName, description, onProgress);
     return bestImage;
   } catch (error) {
     console.error(`  ❌ Image validation error:`, error);

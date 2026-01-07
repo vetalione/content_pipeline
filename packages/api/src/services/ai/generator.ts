@@ -55,6 +55,28 @@ export async function generateContent(
   
   const content = JSON.parse(jsonStr);
   
+  // Match sections with images from research data
+  const researchDataObj = article.researchData as any;
+  const facts = researchDataObj?.facts || [];
+  if (content.sections && facts.length > 0) {
+    content.sections = content.sections.map((section: any, index: number) => {
+      // Try to match section with corresponding fact by index
+      const matchingFact = facts[index];
+      if (matchingFact?.imageUrl) {
+        console.log(`  📸 Section ${index + 1}: matched image from fact "${matchingFact.title}"`);
+        return {
+          ...section,
+          imageUrl: matchingFact.imageUrl,
+          visualSuggestion: matchingFact.visualSuggestion
+        };
+      }
+      return section;
+    });
+    
+    const sectionsWithImages = content.sections.filter((s: any) => s.imageUrl).length;
+    console.log(`📸 Matched ${sectionsWithImages}/${content.sections.length} sections with images from research`);
+  }
+  
   // Save to database
   await prisma.article.update({
     where: { id: articleId },

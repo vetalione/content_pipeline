@@ -19,12 +19,24 @@ interface ResearchProgress {
   estimatedTimeRemaining?: number;
 }
 
+interface ImageSearchProgress {
+  articleId: string;
+  factId: string;
+  status: 'searching' | 'validating' | 'found' | 'complete' | 'not-found' | 'error';
+  progress: number;
+  current?: number;
+  total?: number;
+  confidence?: number;
+  message?: string;
+}
+
 export default function ResearchView({ data, articleId, onUpdate }: Props) {
   const [facts, setFacts] = useState(data.facts || []);
   const [editingFactId, setEditingFactId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any>(null);
   const [progress, setProgress] = useState<ResearchProgress | null>(null);
   const [regeneratingImageId, setRegeneratingImageId] = useState<string | null>(null);
+  const [imageSearchProgress, setImageSearchProgress] = useState<ImageSearchProgress | null>(null);
 
   // Connect to Socket.IO
   useEffect(() => {
@@ -47,6 +59,19 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
     newSocket.on(`research:progress:${articleId}`, (prog: ResearchProgress) => {
       console.log('📡 Research progress received:', prog);
       setProgress(prog);
+    });
+    
+    // Listen for image search progress
+    newSocket.on('image-search-progress', (prog: ImageSearchProgress) => {
+      if (prog.articleId === articleId) {
+        console.log('📸 Image search progress:', prog);
+        setImageSearchProgress(prog);
+        
+        // Clear progress when complete or error
+        if (prog.status === 'complete' || prog.status === 'error' || prog.status === 'not-found') {
+          setTimeout(() => setImageSearchProgress(null), 2000);
+        }
+      }
     });
 
     newSocket.on(`research:complete:${articleId}`, (researchData: any) => {
@@ -198,6 +223,57 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
     } catch (error) {
       console.error('Image regeneration error:', error);
       alert(`Ошибка переподбора картинки: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    } finally {
+      setRegeneratingImageId(null);
+    }
+  };
+
+  // Find image with Gemini validation and progress
+  const handleFindImage = async (factId: string) => {
+    setRegeneratingImageId(factId);
+    setImageSearchProgress({
+      articleId,
+      factId,
+      status: 'searching',
+      progress: 5,
+      message: 'Начинаем поиск...'
+    });
+    
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${API_URL}/api/articles/${articleId}/facts/${factId}/find-image`, {
+        method: 'POST',
+      });
+      
+      const result = await response.json();
+      
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to find image');
+      }
+      
+      console.log('✅ Image found:', result.data);
+      
+      // Update local state with new image
+      setFacts(prevFacts => 
+        prevFacts.map(f => 
+          f.id === factId 
+            ? { ...f, imageUrl: result.data.imageUrl }
+            : f
+        )
+      );
+      
+      if (onUpdate) {
+        onUpdate();
+      }
+    } catch (error) {
+      console.error('Image search error:', error);
+      setImageSearchProgress({
+        articleId,
+        factId,
+        status: 'error',
+        progress: 0,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
     } finally {
       setRegeneratingImageId(null);
     }
@@ -410,28 +486,46 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
               
               {/* Visual suggestion hint if no image URL + Find image button */}
               {!fact.imageUrl && (
-                <div className="my-3 p-2 bg-amber-50 border-l-2 border-amber-400 rounded">
+                <div className="my-3 p-3 bg-amber-50 border-l-2 border-amber-400 rounded">
                   {fact.visualSuggestion && (
                     <p className="text-xs text-amber-800 mb-2">💡 {fact.visualSuggestion}</p>
                   )}
-                  <button
-                    onClick={() => handleRegenerateImage(fact.id)}
-                    disabled={regeneratingImageId === fact.id}
-                    className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Найти картинку через Google"
-                  >
-                    {regeneratingImageId === fact.id ? (
-                      <>
-                        <Search size={12} className="animate-pulse" />
-                        Ищу картинку...
-                      </>
-                    ) : (
-                      <>
-                        <Search size={12} />
-                        Найти картинку
-                      </>
-                    )}
-                  </button>
+                  
+                  {/* Show progress bar when searching for this fact's image */}
+                  {imageSearchProgress && imageSearchProgress.factId === fact.id && regeneratingImageId === fact.id ? (
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <Search size={12} className="animate-pulse text-blue-600" />
+                        <span className="text-xs text-gray-700">{imageSearchProgress.message}</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${imageSearchProgress.progress}%` }}
+                        />
+                      </div>
+                      {imageSearchProgress.current !== undefined && imageSearchProgress.total !== undefined && (
+                        <p className="text-xs text-gray-500">
+                          Проверено: {imageSearchProgress.current}/{imageSearchProgress.total}
+                          {imageSearchProgress.confidence !== undefined && (
+                            <span className="ml-2">
+                              Уверенность: <span className={imageSearchProgress.confidence >= 85 ? 'text-green-600 font-medium' : imageSearchProgress.confidence >= 50 ? 'text-yellow-600' : 'text-red-600'}>{imageSearchProgress.confidence}%</span>
+                            </span>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleFindImage(fact.id)}
+                      disabled={regeneratingImageId === fact.id}
+                      className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Найти картинку через Google + Brave"
+                    >
+                      <Search size={12} />
+                      🔍 Подобрать картинку
+                    </button>
+                  )}
                 </div>
               )}
               

@@ -234,39 +234,10 @@ export async function performPerplexityResearch(
       }
     });
     
-    // Fallback: Find images via Google Custom Search for facts without imageUrl
+    // NOTE: Image search is now done separately per fact via API
+    // Facts are saved without images, user will click "find image" for each fact
     const factsWithoutImages = researchData.facts.filter((f: BiographyFact) => !f.imageUrl);
-    console.log(`🔍 Facts needing Google search: ${factsWithoutImages.length}/${researchData.facts.length}`);
-    
-    if (factsWithoutImages.length > 0) {
-      console.log(`🔍 Google fallback: searching images for ${factsWithoutImages.length} facts`);
-      
-      emitResearchProgress(articleId, {
-        status: 'parsing',
-        currentFact: researchData.facts.length,
-        totalFacts: researchData.facts.length,
-        percentage: 97,
-        message: `Поиск изображений через Google...`,
-        startedAt: new Date().toISOString(),
-      });
-      
-      for (const fact of factsWithoutImages) {
-        const imageUrl = await findFactImage(
-          article.celebrityName,
-          fact.title,
-          fact.year,
-          fact.visualSuggestion
-        );
-        
-        if (imageUrl) {
-          fact.imageUrl = imageUrl;
-          console.log(`✅ Found image for: ${fact.title}`);
-        }
-      }
-      
-      const foundCount = researchData.facts.filter((f: BiographyFact) => f.imageUrl).length;
-      console.log(`📸 Total images: ${foundCount}/${researchData.facts.length}`);
-    }
+    console.log(`📋 Facts without images: ${factsWithoutImages.length}/${researchData.facts.length} (will be searched on demand)`);
     
     // Save to database
     await prisma.article.update({
