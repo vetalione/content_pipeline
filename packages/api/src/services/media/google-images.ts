@@ -1,8 +1,10 @@
 /**
  * Google Custom Search API for finding images
+ * With Brave backup and optimized validation
  */
 
 import { findBestImage } from './gemini-image-validator';
+import { searchBraveImages } from './brave-images';
 
 /**
  * Dictionary of known celebrity name translations (Russian → English)
@@ -320,6 +322,7 @@ function isEnglishName(name: string): boolean {
 /**
  * Find image for a specific biography fact
  * Constructs search query from fact details and validates with Gemini
+ * Uses Google as primary source, Bing as backup
  */
 export async function findFactImage(
   celebrityName: string,
@@ -372,34 +375,41 @@ export async function findFactImage(
     console.log(`  🔎 Russian query: "${ruQuery}"`);
   }
   
-  // Search both languages in parallel (or just English if name is English)
+  // ===== SEARCH PHASE 1: Google (primary source) =====
   let allCandidates: string[] = [];
   
   if (ruQuery) {
     const [enResults, ruResults] = await Promise.all([
-      searchGoogleImages(enQuery, 8),
-      searchGoogleImages(ruQuery, 6)
+      searchGoogleImages(enQuery, 6),
+      searchGoogleImages(ruQuery, 4)
     ]);
-    // English first for international celebrities
     allCandidates = [...enResults, ...ruResults];
   } else {
-    allCandidates = await searchGoogleImages(enQuery, 10);
+    allCandidates = await searchGoogleImages(enQuery, 8);
+  }
+  
+  // ===== SEARCH PHASE 2: Brave (backup source) =====
+  // Add Brave results if we have few candidates
+  if (allCandidates.length < 6) {
+    console.log(`  🦁 Google found only ${allCandidates.length} images, adding Brave backup...`);
+    const braveResults = await searchBraveImages(enQuery, 6);
+    allCandidates = [...allCandidates, ...braveResults];
   }
   
   // Remove duplicates
   const uniqueCandidates = [...new Set(allCandidates)];
   
-  console.log(`  📷 Found: ${uniqueCandidates.length} unique candidates`);
+  console.log(`  📷 Total unique candidates: ${uniqueCandidates.length}`);
   
   if (uniqueCandidates.length === 0) {
     return null;
   }
 
-  // Use Gemini to validate and pick the best image - no timeout, thorough checking
+  // Use Gemini to validate with early-exit optimization
   const description = visualSuggestion || factTitle;
   
   try {
-    console.log(`  🔍 Starting thorough validation of ${uniqueCandidates.length} candidates (no timeout)...`);
+    console.log(`  🔍 Starting optimized validation (early-exit at 85% confidence)...`);
     const bestImage = await findBestImage(uniqueCandidates, celebrityName, description);
     return bestImage;
   } catch (error) {
