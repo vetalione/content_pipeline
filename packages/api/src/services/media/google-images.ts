@@ -378,7 +378,12 @@ export async function findFactImage(
   
   // ===== SEARCH PHASE: Parallel Google + Brave =====
   // Search both sources in parallel for better coverage and rare images
-  let allCandidates: string[] = [];
+  interface ImageCandidate {
+    url: string;
+    source: 'google-en' | 'google-ru' | 'brave';
+  }
+  
+  let allCandidates: ImageCandidate[] = [];
   
   console.log(`  🔍 Searching Google + Brave in parallel...`);
   
@@ -390,7 +395,11 @@ export async function findFactImage(
       searchBraveImages(enQuery, 5)
     ]);
     console.log(`  📊 Results: Google EN=${googleEnResults.length}, Google RU=${googleRuResults.length}, Brave=${braveResults.length}`);
-    allCandidates = [...googleEnResults, ...googleRuResults, ...braveResults];
+    allCandidates = [
+      ...googleEnResults.map(url => ({ url, source: 'google-en' as const })),
+      ...googleRuResults.map(url => ({ url, source: 'google-ru' as const })),
+      ...braveResults.map(url => ({ url, source: 'brave' as const }))
+    ];
   } else {
     // Parallel search: Google + Brave
     const [googleResults, braveResults] = await Promise.all([
@@ -398,13 +407,30 @@ export async function findFactImage(
       searchBraveImages(enQuery, 5)
     ]);
     console.log(`  📊 Results: Google=${googleResults.length}, Brave=${braveResults.length}`);
-    allCandidates = [...googleResults, ...braveResults];
+    allCandidates = [
+      ...googleResults.map(url => ({ url, source: 'google-en' as const })),
+      ...braveResults.map(url => ({ url, source: 'brave' as const }))
+    ];
   }
   
-  // Remove duplicates
-  const uniqueCandidates = [...new Set(allCandidates)];
+  // Remove duplicates by URL, keeping first occurrence (preserves source)
+  const seen = new Set<string>();
+  const uniqueCandidates = allCandidates.filter(candidate => {
+    if (seen.has(candidate.url)) {
+      return false;
+    }
+    seen.add(candidate.url);
+    return true;
+  });
   
   console.log(`  📷 Total unique candidates: ${uniqueCandidates.length}`);
+  
+  // Log source distribution
+  const sourceStats = uniqueCandidates.reduce((acc, c) => {
+    acc[c.source] = (acc[c.source] || 0) + 1;
+    return acc;
+  }, {} as Record<string, number>);
+  console.log(`  📊 Source distribution:`, sourceStats);
   
   if (uniqueCandidates.length === 0) {
     return null;
@@ -421,14 +447,20 @@ export async function findFactImage(
       onProgress({ stage: 'validating', current: 0, total: uniqueCandidates.length });
     }
     
-    const bestImage = await findBestImage(uniqueCandidates, celebrityName, description, onProgress);
+    const bestImage = await findBestImage(
+      uniqueCandidates.map(c => c.url), 
+      celebrityName, 
+      description, 
+      onProgress,
+      uniqueCandidates.map(c => c.source)
+    );
     return bestImage;
   } catch (error) {
     console.error(`  ❌ Image validation error:`, error);
     // On error, return first candidate as fallback
     if (uniqueCandidates.length > 0) {
-      console.log(`  🔄 Error fallback: using first candidate`);
-      return uniqueCandidates[0];
+      console.log(`  🔄 Error fallback: using first candidate from ${uniqueCandidates[0].source}`);
+      return uniqueCandidates[0].url;
     }
     return null;
   }

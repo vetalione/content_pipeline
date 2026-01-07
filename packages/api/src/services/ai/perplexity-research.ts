@@ -92,19 +92,7 @@ export async function performPerplexityResearch(
             'britannica.com'
           ], // Focus on archival sources for TEXT search
           return_citations: true, // Get source URLs
-          return_images: true, // Request images from Perplexity
-          // Image filtering - get only quality historical photos
-          image_domain_filter: [
-            'wikimedia.org',
-            'commons.wikimedia.org',
-            'archive.org',
-            'wikipedia.org',
-            '-gettyimages.com',
-            '-shutterstock.com',
-            '-pinterest.com',
-            '-istockphoto.com'
-          ],
-          image_format_filter: ['jpeg', 'png'], // Only jpeg and png, no webp
+          return_images: false, // Don't request images - will search manually per fact
           search_recency_filter: null // No recency filter for historical research
         })
       }),
@@ -121,23 +109,9 @@ export async function performPerplexityResearch(
     const data: any = await response.json();
     console.log('Perplexity response received:', JSON.stringify(data, null, 2));
     
-    // Check for images in the response (Perplexity returns them as objects with image_url, origin_url, etc.)
-    const rawImages = data.images || [];
-    // Extract direct image URLs from image objects (use image_url, not origin_url which is the article page)
-    const perplexityImages: string[] = rawImages.map((img: any) => {
-      if (typeof img === 'string') {
-        return img;
-      } else if (img && typeof img === 'object') {
-        // Prefer image_url (direct image link), fallback to url/src
-        return img.image_url || img.url || img.src || null;
-      }
-      return null;
-    }).filter((url: string | null): url is string => !!url);
-    
-    console.log('📸 Perplexity returned images:', rawImages.length, '→ extracted URLs:', perplexityImages.length);
-    if (perplexityImages.length > 0) {
-      console.log('  Image URLs:', perplexityImages.slice(0, 5));
-    }
+    // NOTE: We intentionally ignore images from Perplexity
+    // Images will be searched manually per fact using Google/Brave
+    console.log('🚫 Ignoring images from Perplexity (will search manually)');
     
     // Update progress - parsing
     emitResearchProgress(articleId, {
@@ -166,7 +140,7 @@ export async function performPerplexityResearch(
     }
     
     // Convert to ResearchData format, passing Perplexity images
-    let researchData = convertToResearchData(rawData, citations, perplexityImages);
+    let researchData = convertToResearchData(rawData, citations, []);
     console.log('Converted research data with', researchData.facts.length, 'facts');
     
     // In deep_dive mode, merge with existing facts
@@ -198,40 +172,12 @@ export async function performPerplexityResearch(
       startedAt: new Date().toISOString(),
     });
     
-    // Debug: Log image status for each fact
-    console.log('📊 Image URLs from Perplexity:');
+    // IMPORTANT: We ignore imageUrl from Perplexity completely
+    // We only keep visualSuggestion, and images will be searched manually per fact
+    console.log('🚫 Removing imageUrl from Perplexity (keeping only visualSuggestion)...');
     researchData.facts.forEach((f: BiographyFact, i: number) => {
-      // Handle case where imageUrl might be an object (from Perplexity API)
-      let imageUrlStr: string | undefined;
-      if (typeof f.imageUrl === 'string') {
-        imageUrlStr = f.imageUrl;
-      } else if (f.imageUrl && typeof f.imageUrl === 'object') {
-        // Perplexity returns image as object - use image_url (direct image), not origin_url (article page)
-        const imgObj = f.imageUrl as any;
-        imageUrlStr = imgObj.image_url || imgObj.url || imgObj.src || undefined;
-        f.imageUrl = imageUrlStr; // Normalize to string
-      }
-      console.log(`  [${i + 1}] ${f.title}: ${imageUrlStr ? `✅ ${imageUrlStr.substring(0, 80)}...` : '❌ no URL'}`);
-    });
-    
-    // Validate Perplexity image URLs - check if they are proper HTTP(S) URLs
-    console.log('🔍 Validating Perplexity image URLs...');
-    researchData.facts.forEach((f: BiographyFact, i: number) => {
-      // Normalize imageUrl if it's an object - use image_url (direct image), not origin_url (article page)
-      if (f.imageUrl && typeof f.imageUrl === 'object') {
-        const imgObj = f.imageUrl as any;
-        f.imageUrl = imgObj.image_url || imgObj.url || imgObj.src || undefined;
-      }
-      
-      if (f.imageUrl && typeof f.imageUrl === 'string') {
-        // Check if URL is valid HTTP(S) URL
-        if (!f.imageUrl.match(/^https?:\/\/.+\.(jpg|jpeg|png|webp|gif)(\?.*)?$/i)) {
-          console.log(`  ❌ Invalid image URL for fact ${i + 1}: ${f.imageUrl}`);
-          f.imageUrl = undefined; // Clear invalid URL to trigger Google fallback
-        }
-      } else {
-        f.imageUrl = undefined; // Clear non-string values
-      }
+      f.imageUrl = undefined; // Always clear - images will be searched on demand
+      console.log(`  [${i + 1}] ${f.title}: visualSuggestion = "${f.visualSuggestion || 'none'}"`);
     });
     
     // NOTE: Image search is now done separately per fact via API

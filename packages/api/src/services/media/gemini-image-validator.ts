@@ -193,7 +193,8 @@ export async function findBestImage(
   imageUrls: string[],
   celebrityName: string,
   description: string,
-  onProgress?: (progress: { stage: string; current: number; total: number; confidence?: number }) => void
+  onProgress?: (progress: { stage: string; current: number; total: number; confidence?: number }) => void,
+  sources?: Array<'google-en' | 'google-ru' | 'brave'>
 ): Promise<string | null> {
   if (imageUrls.length === 0) {
     return null;
@@ -207,7 +208,8 @@ export async function findBestImage(
     imageUrls,
     async (url, index) => {
       const shortUrl = url.length > 60 ? url.substring(0, 60) + '...' : url;
-      console.log(`  📸 [${index + 1}/${imageUrls.length}] ${shortUrl}`);
+      const source = sources?.[index] || 'unknown';
+      console.log(`  📸 [${index + 1}/${imageUrls.length}] [${source}] ${shortUrl}`);
       
       const validation = await validateImageRelevance(url, celebrityName, description);
       
@@ -226,9 +228,9 @@ export async function findBestImage(
       const icon = validation.confidence >= EARLY_EXIT_THRESHOLD ? '🎯' :
                    validation.confidence >= 70 ? '✅' :
                    validation.confidence >= 50 ? '⚠️' : '❌';
-      console.log(`  ${icon} [${index + 1}] ${validation.confidence}% - ${validation.reasoning}`);
+      console.log(`  ${icon} [${index + 1}] [${source}] ${validation.confidence}% - ${validation.reasoning}`);
       
-      return { url, validation };
+      return { url, validation, source };
     },
     MAX_CONCURRENT_VALIDATIONS,
     (result) => result.validation.confidence >= EARLY_EXIT_THRESHOLD
@@ -236,7 +238,7 @@ export async function findBestImage(
 
   // If early exit found a great match, use it
   if (earlyExitResult) {
-    console.log(`  ✅ Using early-exit match (${earlyExitResult.validation.confidence}%)`);
+    console.log(`  ✅ Using early-exit match from ${earlyExitResult.source} (${earlyExitResult.validation.confidence}%)`);
     if (onProgress) {
       onProgress({
         stage: 'found',
@@ -260,7 +262,7 @@ export async function findBestImage(
     a.validation.confidence > b.validation.confidence ? a : b
   );
 
-  console.log(`  🏆 Best match: ${best.validation.confidence}% - ${best.validation.reasoning}`);
+  console.log(`  🏆 Best match from ${best.source}: ${best.validation.confidence}% - ${best.validation.reasoning}`);
   
   return best.url;
 }
