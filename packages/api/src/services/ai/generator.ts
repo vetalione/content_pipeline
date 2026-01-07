@@ -53,7 +53,31 @@ export async function generateContent(
     jsonStr = jsonStr.replace(/^```\s*\n?/, '').replace(/\n?```\s*$/, '');
   }
   
-  const content = JSON.parse(jsonStr);
+  let content;
+  try {
+    content = JSON.parse(jsonStr);
+  } catch (parseError) {
+    console.error('❌ JSON parse error:', parseError);
+    console.log('📄 Raw response (first 500 chars):', responseText.substring(0, 500));
+    console.log('📄 Problematic JSON around position 3017:', jsonStr.substring(2900, 3100));
+    
+    // Try to fix common JSON issues
+    try {
+      // Fix unescaped quotes in strings
+      let fixedJson = jsonStr
+        // Fix unescaped newlines in strings
+        .replace(/\\n/g, '\\\\n')
+        // Fix unescaped quotes (but not already escaped ones)
+        .replace(/([^\\])"([^"]*)"([^:])/g, '$1\\"$2\\"$3');
+      
+      content = JSON.parse(fixedJson);
+      console.log('✅ Successfully parsed after fixing JSON');
+    } catch (retryError) {
+      console.error('❌ Failed to parse JSON even after fixes');
+      console.log('Full response:', responseText);
+      throw new Error(`Failed to parse Claude response: ${parseError instanceof Error ? parseError.message : 'Unknown error'}`);
+    }
+  }
   
   // Match sections with images from research data
   const researchDataObj = article.researchData as any;
