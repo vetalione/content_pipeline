@@ -194,14 +194,15 @@ export async function findBestImage(
   celebrityName: string,
   description: string,
   onProgress?: (progress: { stage: string; current: number; total: number; confidence?: number }) => void,
-  sources?: Array<'google-en' | 'google-ru' | 'brave'>
+  sources?: Array<'google-en' | 'google-ru' | 'brave'>,
+  confidenceThreshold: number = 85
 ): Promise<string | null> {
   if (imageUrls.length === 0) {
     return null;
   }
 
-  console.log(`  🔍 Validating ${imageUrls.length} candidates (max ${MAX_CONCURRENT_VALIDATIONS} parallel, early-exit at ${EARLY_EXIT_THRESHOLD}%)...`);
-
+  console.log(`  🔍 Validating ${imageUrls.length} candidates (max ${MAX_CONCURRENT_VALIDATIONS} parallel, early-exit at ${confidenceThreshold}%)...`);
+  
   let processedCount = 0;
   
   const { results, earlyExitResult } = await processWithConcurrency(
@@ -225,7 +226,7 @@ export async function findBestImage(
         });
       }
       
-      const icon = validation.confidence >= EARLY_EXIT_THRESHOLD ? '🎯' :
+      const icon = validation.confidence >= confidenceThreshold ? '🎯' :
                    validation.confidence >= 70 ? '✅' :
                    validation.confidence >= 50 ? '⚠️' : '❌';
       console.log(`  ${icon} [${index + 1}] [${source}] ${validation.confidence}% - ${validation.reasoning}`);
@@ -233,7 +234,7 @@ export async function findBestImage(
       return { url, validation, source };
     },
     MAX_CONCURRENT_VALIDATIONS,
-    (result) => result.validation.confidence >= EARLY_EXIT_THRESHOLD
+    (result) => result.validation.confidence >= confidenceThreshold
   );
 
   // If early exit found a great match, use it

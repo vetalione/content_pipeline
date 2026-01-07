@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react';
 import { ResearchData, BiographyFact } from '@content-pipeline/shared';
 import { ExternalLink, Edit2, Trash2, Square, RotateCcw, Search } from 'lucide-react';
 import { io } from 'socket.io-client';
+import ImageSearchSettings, { ImageSearchConfig } from './ImageSearchSettings';
 
 interface Props {
   data: ResearchData;
@@ -37,6 +38,28 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
   const [progress, setProgress] = useState<ResearchProgress | null>(null);
   const [regeneratingImageId, setRegeneratingImageId] = useState<string | null>(null);
   const [imageSearchProgress, setImageSearchProgress] = useState<ImageSearchProgress | null>(null);
+  
+  // Image search configuration (saved in localStorage)
+  const [searchConfig, setSearchConfig] = useState<ImageSearchConfig>(() => {
+    const saved = localStorage.getItem('imageSearchConfig');
+    if (saved) {
+      try {
+        return JSON.parse(saved);
+      } catch (e) {
+        console.error('Failed to parse saved config:', e);
+      }
+    }
+    return {
+      sources: { google: true, brave: true },
+      confidenceThreshold: 85,
+      resultsPerSource: 5
+    };
+  });
+  
+  // Save config to localStorage when changed
+  useEffect(() => {
+    localStorage.setItem('imageSearchConfig', JSON.stringify(searchConfig));
+  }, [searchConfig]);
 
   // Connect to Socket.IO
   useEffect(() => {
@@ -205,6 +228,15 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
       const response = await fetch(`${API_URL}/api/articles/${articleId}/facts/${factId}/find-image`, {
         method: 'POST',
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          useGoogle: searchConfig.sources.google,
+          useBrave: searchConfig.sources.brave,
+          confidenceThreshold: searchConfig.confidenceThreshold,
+          resultsPerSource: searchConfig.resultsPerSource
+        })
       });
       
       const result = await response.json();
@@ -307,6 +339,10 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
           )}
         </div>
       )}
+
+      {/* Image Search Settings */}
+      <ImageSearchSettings config={searchConfig} onChange={setSearchConfig} />
+
 
       {/* Edit Modal */}
       {editingFactId && editForm && (

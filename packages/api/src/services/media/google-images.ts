@@ -319,6 +319,13 @@ function isEnglishName(name: string): boolean {
   return allLetters.length > 0 && latinLetters.length / allLetters.length > 0.5;
 }
 
+export interface ImageSearchOptions {
+  useGoogle?: boolean;
+  useBrave?: boolean;
+  confidenceThreshold?: number;
+  resultsPerSource?: number;
+}
+
 /**
  * Find image for a specific biography fact
  * Constructs search query from fact details and validates with Gemini
@@ -329,8 +336,17 @@ export async function findFactImage(
   factTitle: string,
   factYear?: number,
   visualSuggestion?: string,
-  onProgress?: (progress: { stage: string; current: number; total: number; confidence?: number }) => void
+  onProgress?: (progress: { stage: string; current: number; total: number; confidence?: number }) => void,
+  options?: ImageSearchOptions
 ): Promise<string | null> {
+  // Default options
+  const {
+    useGoogle = true,
+    useBrave = true,
+    confidenceThreshold = 85,
+    resultsPerSource = 5
+  } = options || {};
+  
   // Always translate to English using dictionary + transliteration
   const englishName = translateCelebrityName(celebrityName);
   const nameIsEnglish = isEnglishName(celebrityName);
@@ -385,32 +401,64 @@ export async function findFactImage(
   
   let allCandidates: ImageCandidate[] = [];
   
-  console.log(`  🔍 Searching Google + Brave in parallel...`);
+  console.log(`  🔍 Searching: Google=${useGoogle}, Brave=${useBrave}, resultsPerSource=${resultsPerSource}`);
   
   if (ruQuery) {
-    // Parallel search: Google EN, Google RU, Brave EN
-    const [googleEnResults, googleRuResults, braveResults] = await Promise.all([
-      searchGoogleImages(enQuery, 5),
-      searchGoogleImages(ruQuery, 4),
-      searchBraveImages(enQuery, 5)
-    ]);
-    console.log(`  📊 Results: Google EN=${googleEnResults.length}, Google RU=${googleRuResults.length}, Brave=${braveResults.length}`);
-    allCandidates = [
-      ...googleEnResults.map(url => ({ url, source: 'google-en' as const })),
-      ...googleRuResults.map(url => ({ url, source: 'google-ru' as const })),
-      ...braveResults.map(url => ({ url, source: 'brave' as const }))
-    ];
+    // Parallel search: Google EN, Google RU, Brave EN (for Russian names)
+    const searches: Promise<string[]>[] = [];
+    const sources: Array<'google-en' | 'google-ru' | 'brave'> = [];
+    
+    if (useGoogle) {
+      searches.push(searchGoogleImages(enQuery, resultsPerSource));
+      sources.push('google-en');
+      searches.push(searchGoogleImages(ruQuery, Math.max(3, Math.floor(resultsPerSource * 0.8))));
+      sources.push('google-ru');
+    }
+    
+    if (useBrave) {
+      searches.push(searchBraveImages(enQuery, resultsPerSource));
+      sources.push('brave');
+    }
+    
+    if (searches.length === 0) {
+      console.log(`  ⚠️ No search engines enabled`);
+      return null;
+    }
+    
+    const results = await Promise.all(searches);
+    let sourceIndex = 0;
+    results.forEach(urls => {
+      const source = sources[sourceIndex++];
+      console.log(`  📊 ${source}: ${urls.length} results`);
+      allCandidates.push(...urls.map(url => ({ url, source })));
+    });
   } else {
-    // Parallel search: Google + Brave
-    const [googleResults, braveResults] = await Promise.all([
-      searchGoogleImages(enQuery, 6),
-      searchBraveImages(enQuery, 5)
-    ]);
-    console.log(`  📊 Results: Google=${googleResults.length}, Brave=${braveResults.length}`);
-    allCandidates = [
-      ...googleResults.map(url => ({ url, source: 'google-en' as const })),
-      ...braveResults.map(url => ({ url, source: 'brave' as const }))
-    ];
+    // Parallel search: Google + Brave (non-Russian)
+    const searches: Promise<string[]>[] = [];
+    const sources: Array<'google-en' | 'brave'> = [];
+    
+    if (useGoogle) {
+      searches.push(searchGoogleImages(enQuery, resultsPerSource));
+      sources.push('google-en');
+    }
+    
+    if (useBrave) {
+      searches.push(searchBraveImages(enQuery, resultsPerSource));
+      sources.push('brave');
+    }
+    
+    if (searches.length === 0) {
+      console.log(`  ⚠️ No search engines enabled`);
+      return null;
+    }
+    
+    const results = await Promise.all(searches);
+    let sourceIndex = 0;
+    results.forEach(urls => {
+      const source = sources[sourceIndex++];
+      console.log(`  📊 ${source}: ${urls.length} results`);
+      allCandidates.push(...urls.map(url => ({ url, source })));
+    });
   }
   
   // Remove duplicates by URL, keeping first occurrence (preserves source)
@@ -440,7 +488,7 @@ export async function findFactImage(
   const description = visualSuggestion || factTitle;
   
   try {
-    console.log(`  🔍 Starting optimized validation (early-exit at 85% confidence)...`);
+    console.log(`  🔍 Starting optimized validation (early-exit at ${confidenceThreshold}% confidence)...`);
     
     // Report search complete, starting validation
     if (onProgress) {
@@ -452,7 +500,8 @@ export async function findFactImage(
       celebrityName, 
       description, 
       onProgress,
-      uniqueCandidates.map(c => c.source)
+      uniqueCandidates.map(c => c.source),
+      confidenceThreshold
     );
     return bestImage;
   } catch (error) {
