@@ -121,11 +121,22 @@ export async function performPerplexityResearch(
     const data: any = await response.json();
     console.log('Perplexity response received:', JSON.stringify(data, null, 2));
     
-    // Check for images in the response (Perplexity returns them in a separate field)
-    const perplexityImages: string[] = data.images || [];
-    console.log('📸 Perplexity returned images:', perplexityImages.length);
+    // Check for images in the response (Perplexity returns them as objects with image_url, origin_url, etc.)
+    const rawImages = data.images || [];
+    // Extract direct image URLs from image objects (use image_url, not origin_url which is the article page)
+    const perplexityImages: string[] = rawImages.map((img: any) => {
+      if (typeof img === 'string') {
+        return img;
+      } else if (img && typeof img === 'object') {
+        // Prefer image_url (direct image link), fallback to url/src
+        return img.image_url || img.url || img.src || null;
+      }
+      return null;
+    }).filter((url: string | null): url is string => !!url);
+    
+    console.log('📸 Perplexity returned images:', rawImages.length, '→ extracted URLs:', perplexityImages.length);
     if (perplexityImages.length > 0) {
-      console.log('  Images from Perplexity:', perplexityImages.slice(0, 5));
+      console.log('  Image URLs:', perplexityImages.slice(0, 5));
     }
     
     // Update progress - parsing
@@ -195,9 +206,9 @@ export async function performPerplexityResearch(
       if (typeof f.imageUrl === 'string') {
         imageUrlStr = f.imageUrl;
       } else if (f.imageUrl && typeof f.imageUrl === 'object') {
-        // Perplexity sometimes returns image as object with origin_url
+        // Perplexity returns image as object - use image_url (direct image), not origin_url (article page)
         const imgObj = f.imageUrl as any;
-        imageUrlStr = imgObj.origin_url || imgObj.url || imgObj.src || undefined;
+        imageUrlStr = imgObj.image_url || imgObj.url || imgObj.src || undefined;
         f.imageUrl = imageUrlStr; // Normalize to string
       }
       console.log(`  [${i + 1}] ${f.title}: ${imageUrlStr ? `✅ ${imageUrlStr.substring(0, 80)}...` : '❌ no URL'}`);
@@ -206,10 +217,10 @@ export async function performPerplexityResearch(
     // Validate Perplexity image URLs - check if they are proper HTTP(S) URLs
     console.log('🔍 Validating Perplexity image URLs...');
     researchData.facts.forEach((f: BiographyFact, i: number) => {
-      // Normalize imageUrl if it's an object
+      // Normalize imageUrl if it's an object - use image_url (direct image), not origin_url (article page)
       if (f.imageUrl && typeof f.imageUrl === 'object') {
         const imgObj = f.imageUrl as any;
-        f.imageUrl = imgObj.origin_url || imgObj.url || imgObj.src || undefined;
+        f.imageUrl = imgObj.image_url || imgObj.url || imgObj.src || undefined;
       }
       
       if (f.imageUrl && typeof f.imageUrl === 'string') {
