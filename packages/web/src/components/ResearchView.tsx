@@ -190,44 +190,6 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
     }
   };
 
-  const handleRegenerateImage = async (factId: string) => {
-    setRegeneratingImageId(factId);
-    
-    try {
-      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
-      const response = await fetch(`${API_URL}/api/articles/${articleId}/facts/${factId}/regenerate-image`, {
-        method: 'POST',
-      });
-      
-      const result = await response.json();
-      
-      if (!response.ok) {
-        throw new Error(result.message || 'Failed to regenerate image');
-      }
-      
-      console.log('✅ Image regenerated:', result.data);
-      
-      // Update local state with new image
-      setFacts(prevFacts => 
-        prevFacts.map(f => 
-          f.id === factId 
-            ? { ...f, imageUrl: result.data.newImageUrl }
-            : f
-        )
-      );
-      
-      // Notify parent to refresh
-      if (onUpdate) {
-        onUpdate();
-      }
-    } catch (error) {
-      console.error('Image regeneration error:', error);
-      alert(`Ошибка переподбора картинки: ${error instanceof Error ? error.message : 'Unknown error'}`);
-    } finally {
-      setRegeneratingImageId(null);
-    }
-  };
-
   // Find image with Gemini validation and progress
   const handleFindImage = async (factId: string) => {
     setRegeneratingImageId(factId);
@@ -462,25 +424,41 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
                     )}
                   </div>
                   
-                  {/* Regenerate image button */}
-                  <button
-                    onClick={() => handleRegenerateImage(fact.id)}
-                    disabled={regeneratingImageId === fact.id}
-                    className="mt-2 text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
-                    title="Найти альтернативную картинку"
-                  >
-                    {regeneratingImageId === fact.id ? (
-                      <>
-                        <RotateCcw size={12} className="animate-spin" />
-                        Подбираю...
-                      </>
-                    ) : (
-                      <>
-                        <RotateCcw size={12} />
-                        Переподобрать картинку
-                      </>
-                    )}
-                  </button>
+                  {/* Show progress bar if re-searching for this fact's image */}
+                  {imageSearchProgress && imageSearchProgress.factId === fact.id && regeneratingImageId === fact.id ? (
+                    <div className="mt-2 space-y-2">
+                      <div className="flex items-center gap-2">
+                        <RotateCcw size={12} className="animate-spin text-blue-600" />
+                        <span className="text-xs text-gray-700">{imageSearchProgress.message}</span>
+                      </div>
+                      <div className="w-full bg-gray-200 rounded-full h-2">
+                        <div 
+                          className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                          style={{ width: `${imageSearchProgress.progress}%` }}
+                        />
+                      </div>
+                      {imageSearchProgress.current !== undefined && imageSearchProgress.total !== undefined && (
+                        <p className="text-xs text-gray-500">
+                          Проверено: {imageSearchProgress.current}/{imageSearchProgress.total}
+                          {imageSearchProgress.confidence !== undefined && (
+                            <span className="ml-2">
+                              Уверенность: <span className={imageSearchProgress.confidence >= 85 ? 'text-green-600 font-medium' : imageSearchProgress.confidence >= 50 ? 'text-yellow-600' : 'text-red-600'}>{imageSearchProgress.confidence}%</span>
+                            </span>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => handleFindImage(fact.id)}
+                      disabled={regeneratingImageId === fact.id}
+                      className="mt-2 text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+                      title="Найти альтернативную картинку"
+                    >
+                      <RotateCcw size={12} />
+                      Переподобрать картинку
+                    </button>
+                  )}
                 </div>
               )}
               
