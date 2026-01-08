@@ -374,6 +374,30 @@ export interface ImageSearchOptions {
   usePerplexity?: boolean;
   confidenceThreshold?: number;
   resultsPerSource?: number;
+  excludeUrls?: string[];  // URLs to exclude (already used images)
+}
+
+/**
+ * Check if URL likely contains a collage/grid image
+ */
+function isLikelyCollage(url: string): boolean {
+  const collagePatterns = [
+    /collage/i,
+    /grid/i,
+    /through.?the.?years/i,
+    /evolution/i,
+    /timeline/i,
+    /transformation/i,
+    /then.?and.?now/i,
+    /before.?after/i,
+    /comparison/i,
+    /compilation/i,
+    /montage/i,
+    /multiple/i,
+    /collection/i,
+  ];
+  
+  return collagePatterns.some(pattern => pattern.test(url));
 }
 
 /**
@@ -395,8 +419,12 @@ export async function findFactImage(
     useBrave = true,
     usePerplexity = true,
     confidenceThreshold = 85,
-    resultsPerSource = 5
+    resultsPerSource = 5,
+    excludeUrls = []
   } = options || {};
+  
+  // Create a Set for O(1) lookup
+  const excludedUrlSet = new Set(excludeUrls.map(u => u.toLowerCase()));
   
   // Always translate to English using dictionary + transliteration
   const englishName = translateCelebrityName(celebrityName);
@@ -495,15 +523,40 @@ export async function findFactImage(
     allCandidates.push(...urls.map(url => ({ url, source })));
   });
   
-  // Remove duplicates by URL, keeping first occurrence (preserves source)
+  // Remove duplicates, excluded URLs, and likely collages
   const seen = new Set<string>();
+  let excludedCount = 0;
+  let collageCount = 0;
+  
   const uniqueCandidates = allCandidates.filter(candidate => {
-    if (seen.has(candidate.url)) {
+    const urlLower = candidate.url.toLowerCase();
+    
+    // Skip already seen
+    if (seen.has(urlLower)) {
       return false;
     }
-    seen.add(candidate.url);
+    seen.add(urlLower);
+    
+    // Skip excluded URLs (already used in this session)
+    if (excludedUrlSet.has(urlLower)) {
+      excludedCount++;
+      console.log(`  🚫 Skipping already used: ${candidate.url.substring(0, 60)}...`);
+      return false;
+    }
+    
+    // Skip likely collages
+    if (isLikelyCollage(candidate.url)) {
+      collageCount++;
+      console.log(`  🚫 Skipping likely collage: ${candidate.url.substring(0, 60)}...`);
+      return false;
+    }
+    
     return true;
   });
+  
+  if (excludedCount > 0 || collageCount > 0) {
+    console.log(`  🔄 Filtered: ${excludedCount} already used, ${collageCount} collages`);
+  }
   
   console.log(`  📷 Total unique candidates: ${uniqueCandidates.length}`);
   

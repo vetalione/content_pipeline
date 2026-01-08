@@ -121,21 +121,24 @@ CRITICAL RULES:
 2. Stock photos, random people, or thematic images WITHOUT the celebrity = REJECT (0-20%)
 3. Childhood/young photos: the person may look different, but it must BE them
 4. If you cannot identify "${celebrityName}" in the image = REJECT
+5. COLLAGES/GRIDS: If image shows multiple photos arranged in a grid/collage/timeline = LOWER SCORE (-20%)
+   - We need a SINGLE clean photo, not a compilation
+   - Collages often have low quality individual images
 
 SCORING (only if celebrity IS in photo):
-- 85-100: Celebrity confirmed + context matches description well
-- 70-84: Celebrity confirmed + context partially matches (similar era/theme)
+- 85-100: Celebrity confirmed + context matches + SINGLE high-quality photo
+- 70-84: Celebrity confirmed + context partially matches + clean photo
 - 55-69: Celebrity confirmed + generic photo (doesn't contradict topic)
-- 40-54: Celebrity probably there but hard to confirm
+- 40-54: Celebrity probably there but hard to confirm, OR it's a collage/grid
 - 0-39: Celebrity NOT in photo, or wrong person, or contradicts description
 
-EXAMPLES for "${celebrityName}":
-- Childhood photo of the actual person = 65-80% (they look different young, but it's them)
-- Adult photo when description says "childhood" = 35-45% (wrong era but right person)
-- Random child photo that's NOT the celebrity = 0-15% (WRONG PERSON)
-- Stock photo of generic scene = 0-10% (celebrity not present)
+IMAGE QUALITY ISSUES (reduce score):
+- Collage/grid with multiple photos: -20%
+- Blurry or heavily compressed: -15%
+- Cropped face cut off: -15%
+- Watermarks covering face: -10%
 
-JSON only: {"isRelevant": bool, "confidence": num, "reasoning": "brief - explain if celebrity is visible"}`;
+JSON only: {"isRelevant": bool, "confidence": num, "reasoning": "brief - is celebrity visible? quality issues?"}`;
 
     const result = await model.generateContent([
       { inlineData: { data: base64Image, mimeType: imageData.mimeType } },

@@ -75,6 +75,9 @@ export async function runAutopilot(
     if (sections.length > 0) {
       const { findFactImage } = await import('../media/google-images');
       
+      // Track already used images to avoid duplicates
+      const usedImageUrls: string[] = [];
+      
       for (let i = 0; i < sections.length; i++) {
         const section = sections[i];
         const progressPercent = 45 + Math.round((i / sections.length) * 35);
@@ -120,10 +123,17 @@ export async function runAutopilot(
             year,
             visualSuggestion,
             undefined,
-            { confidenceThreshold: 65, resultsPerSource: 5 }
+            { 
+              confidenceThreshold: 65, 
+              resultsPerSource: 5,
+              excludeUrls: usedImageUrls  // Don't reuse same images
+            }
           );
           
           if (imageUrl) {
+            // Track this URL to avoid reusing
+            usedImageUrls.push(imageUrl);
+            
             // Update section with image
             sections[i] = { ...section, imageUrl };
             
