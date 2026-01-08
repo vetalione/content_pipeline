@@ -391,6 +391,162 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
   }
 });
 
+// Find image for a specific SECTION in generated article (with WebSocket progress)
+articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, next) => {
+  try {
+    const { id: articleId, sectionIndex } = req.params;
+    const sectionIdx = parseInt(sectionIndex, 10);
+    const { useGoogle = true, useBrave = true, usePerplexity = true, confidenceThreshold = 70, resultsPerSource = 5 } = req.body || {};
+    
+    // Get article with content and research data
+    const article = await prisma.article.findUnique({
+      where: { id: articleId }
+    });
+    
+    if (!article || !article.content) {
+      return res.status(404).json({ success: false, message: 'Article or content not found' });
+    }
+    
+    const content = article.content as any;
+    const researchData = article.researchData as any;
+    const sections = content.sections || [];
+    
+    if (sectionIdx < 0 || sectionIdx >= sections.length) {
+      return res.status(404).json({ success: false, message: 'Section not found' });
+    }
+    
+    const section = sections[sectionIdx];
+    const sectionTitle = section.heading || section.title || `Section ${sectionIdx + 1}`;
+    
+    // Find matching fact by factId or title similarity
+    let matchingFact = null;
+    const facts = researchData?.facts || [];
+    
+    if (section.factId) {
+      matchingFact = facts.find((f: any) => f.id === section.factId && !f.isDeleted);
+    }
+    
+    if (!matchingFact) {
+      matchingFact = facts.find((f: any) => 
+        !f.isDeleted && (
+          f.title.toLowerCase().includes(sectionTitle.toLowerCase().substring(0, 20)) ||
+          sectionTitle.toLowerCase().includes(f.title.toLowerCase().substring(0, 20))
+        )
+      );
+    }
+    
+    // Build search parameters from fact or section
+    const visualSuggestion = matchingFact?.visualSuggestion || `${article.celebrityName} - ${sectionTitle}`;
+    const year = matchingFact?.year || section.year || '';
+    
+    // Emit progress: starting
+    const io = getIO();
+    io.emit('section-image-search-progress', {
+      articleId,
+      sectionIndex: sectionIdx,
+      status: 'searching',
+      progress: 10,
+      message: 'Поиск изображений...'
+    });
+    
+    console.log(`🔍 Finding image for section ${sectionIdx + 1}: "${sectionTitle}"`);
+    if (matchingFact) {
+      console.log(`  ✅ Matched to fact: "${matchingFact.title}"`);
+      console.log(`  🎨 Visual suggestion: "${visualSuggestion}"`);
+    }
+    
+    // Use findFactImage with Gemini validation
+    const imageUrl = await findFactImage(
+      article.celebrityName,
+      sectionTitle,
+      year,
+      visualSuggestion,
+      // Progress callback
+      (progress: { stage: string; current: number; total: number; confidence?: number }) => {
+        io.emit('section-image-search-progress', {
+          articleId,
+          sectionIndex: sectionIdx,
+          status: progress.stage,
+          progress: Math.round((progress.current / progress.total) * 100),
+          current: progress.current,
+          total: progress.total,
+          confidence: progress.confidence,
+          message: progress.stage === 'validating' 
+            ? `Проверка изображения ${progress.current}/${progress.total}...`
+            : progress.stage === 'found'
+            ? `Найдено! Уверенность: ${progress.confidence}%`
+            : 'Поиск...'
+        });
+      },
+      { useGoogle, useBrave, usePerplexity, confidenceThreshold, resultsPerSource }
+    );
+    
+    if (!imageUrl) {
+      io.emit('section-image-search-progress', {
+        articleId,
+        sectionIndex: sectionIdx,
+        status: 'not-found',
+        progress: 100,
+        message: 'Изображение не найдено'
+      });
+      
+      return res.status(404).json({ 
+        success: false, 
+        message: 'No suitable image found' 
+      });
+    }
+    
+    // Update section with new image
+    sections[sectionIdx].imageUrl = imageUrl;
+    if (matchingFact?.visualSuggestion) {
+      sections[sectionIdx].visualSuggestion = matchingFact.visualSuggestion;
+    }
+    
+    await prisma.article.update({
+      where: { id: articleId },
+      data: {
+        content: { ...content, sections } as any,
+        updatedAt: new Date()
+      }
+    });
+    
+    // Emit progress: complete
+    io.emit('section-image-search-progress', {
+      articleId,
+      sectionIndex: sectionIdx,
+      status: 'complete',
+      progress: 100,
+      message: 'Изображение найдено и сохранено!'
+    });
+    
+    console.log(`✅ Found and saved image for section ${sectionIdx + 1}: ${imageUrl}`);
+    
+    res.json({ 
+      success: true, 
+      data: { 
+        sectionIndex: sectionIdx,
+        imageUrl 
+      } 
+    });
+    
+  } catch (error) {
+    console.error('Section image search error:', error);
+    
+    try {
+      const io = getIO();
+      io.emit('section-image-search-progress', {
+        articleId: req.params.id,
+        sectionIndex: parseInt(req.params.sectionIndex, 10),
+        status: 'error',
+        progress: 0,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    } catch {}
+    
+    next(error);
+  }
+});
+
 // Update a quote
 articlesRouter.put('/:id/quotes/:quoteId', async (req, res, next) => {
   try {

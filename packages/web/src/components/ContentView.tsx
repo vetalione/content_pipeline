@@ -1,19 +1,119 @@
+import { useState, useEffect } from 'react';
+import { io } from 'socket.io-client';
 import { ArticleContent, ResearchData } from '../types';
-import { Edit } from 'lucide-react';
+import { Edit, ImagePlus, RefreshCw, Settings, ChevronDown, ChevronUp } from 'lucide-react';
+import ImageSearchSettings, { ImageSearchConfig } from './ImageSearchSettings';
 
 interface Props {
   content: ArticleContent;
   researchData?: ResearchData | null;
+  articleId: string;
+  onUpdate?: () => void;
 }
 
-export default function ContentView({ content, researchData }: Props) {
-  // Get images from research facts
-  const factImages = researchData?.facts?.filter((f: any) => !f.isDeleted && f.imageUrl) || [];
+interface SectionImageProgress {
+  articleId: string;
+  sectionIndex: number;
+  status: string;
+  progress: number;
+  message?: string;
+  confidence?: number;
+}
+
+export default function ContentView({ content, researchData, articleId, onUpdate }: Props) {
+  const [searchingImageIds, setSearchingImageIds] = useState<Set<number>>(new Set());
+  const [imageProgress, setImageProgress] = useState<SectionImageProgress | null>(null);
+  const [showSettings, setShowSettings] = useState(false);
   
-  // Helper to get image for section index
-  const getImageForSection = (sectionIndex: number) => {
-    if (sectionIndex < factImages.length) {
-      return factImages[sectionIndex];
+  // Image search configuration
+  const [searchConfig, setSearchConfig] = useState<ImageSearchConfig>(() => {
+    const saved = localStorage.getItem('imageSearchConfig');
+    return saved ? JSON.parse(saved) : {
+      sources: { google: true, brave: true, perplexity: true },
+      confidenceThreshold: 70,
+      resultsPerSource: 5
+    };
+  });
+
+  // Save config to localStorage
+  useEffect(() => {
+    localStorage.setItem('imageSearchConfig', JSON.stringify(searchConfig));
+  }, [searchConfig]);
+
+  // Socket.IO connection
+  useEffect(() => {
+    const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+    const socket = io(API_URL, { transports: ['websocket', 'polling'] });
+
+    socket.on('section-image-search-progress', (prog: SectionImageProgress) => {
+      if (prog.articleId === articleId) {
+        setImageProgress(prog);
+        if (prog.status === 'complete' || prog.status === 'error' || prog.status === 'not-found') {
+          setTimeout(() => setImageProgress(null), 2000);
+        }
+      }
+    });
+
+    return () => {
+      socket.disconnect();
+    };
+  }, [articleId]);
+
+  // Find image for section
+  const handleFindImage = async (sectionIndex: number) => {
+    setSearchingImageIds(prev => new Set(prev).add(sectionIndex));
+    setImageProgress({
+      articleId,
+      sectionIndex,
+      status: 'searching',
+      progress: 5,
+      message: 'Начинаем поиск...'
+    });
+
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${API_URL}/api/articles/${articleId}/sections/${sectionIndex}/find-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          useGoogle: searchConfig.sources.google,
+          useBrave: searchConfig.sources.brave,
+          usePerplexity: searchConfig.sources.perplexity,
+          confidenceThreshold: searchConfig.confidenceThreshold,
+          resultsPerSource: searchConfig.resultsPerSource
+        })
+      });
+
+      const result = await response.json();
+      if (!response.ok) {
+        throw new Error(result.message || 'Failed to find image');
+      }
+
+      console.log('✅ Section image found:', result.data);
+      onUpdate?.();
+    } catch (error) {
+      console.error('Section image search error:', error);
+      setImageProgress({
+        articleId,
+        sectionIndex,
+        status: 'error',
+        progress: 0,
+        message: error instanceof Error ? error.message : 'Unknown error'
+      });
+    } finally {
+      setSearchingImageIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(sectionIndex);
+        return newSet;
+      });
+    }
+  };
+
+  // Get matching fact for section
+  const getMatchingFact = (section: any) => {
+    const facts = researchData?.facts || [];
+    if (section.factId) {
+      return facts.find((f: any) => f.id === section.factId && !f.isDeleted);
     }
     return null;
   };
@@ -22,11 +122,28 @@ export default function ContentView({ content, researchData }: Props) {
     <div className="card">
       <div className="flex justify-between items-start mb-6">
         <h2 className="text-2xl font-semibold">✍️ Сгенерированная статья</h2>
-        <button className="btn btn-secondary flex items-center gap-2">
-          <Edit size={18} />
-          Редактировать
-        </button>
+        <div className="flex gap-2">
+          <button 
+            onClick={() => setShowSettings(!showSettings)}
+            className="btn btn-secondary flex items-center gap-2"
+          >
+            <Settings size={18} />
+            Настройки поиска
+            {showSettings ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+          </button>
+          <button className="btn btn-secondary flex items-center gap-2">
+            <Edit size={18} />
+            Редактировать
+          </button>
+        </div>
       </div>
+
+      {/* Image Search Settings */}
+      {showSettings && (
+        <div className="mb-6">
+          <ImageSearchSettings config={searchConfig} onChange={setSearchConfig} />
+        </div>
+      )}
 
       {/* Title */}
       <div className="mb-8">
@@ -43,7 +160,9 @@ export default function ContentView({ content, researchData }: Props) {
       {/* Sections */}
       <div className="space-y-8 mb-8">
         {content.sections?.map((section, idx) => {
-          const sectionImage = getImageForSection(idx);
+          const matchingFact = getMatchingFact(section);
+          const isSearching = searchingImageIds.has(idx);
+          const currentProgress = imageProgress?.sectionIndex === idx ? imageProgress : null;
           
           return (
           <div key={section.number || section.id || idx} className="border-l-4 border-primary pl-6">
@@ -51,19 +170,61 @@ export default function ContentView({ content, researchData }: Props) {
               {section.number || section.order}. {section.heading || section.title}
             </h3>
             
-            {/* Section Image from Research */}
-            {sectionImage && (
-              <div className="my-4 rounded-lg overflow-hidden">
+            {/* Section Image */}
+            {section.imageUrl ? (
+              <div className="my-4 rounded-lg overflow-hidden relative group">
                 <img 
-                  src={sectionImage.imageUrl} 
-                  alt={sectionImage.visualSuggestion || sectionImage.title}
+                  src={section.imageUrl} 
+                  alt={section.visualSuggestion || section.heading || section.title}
                   className="w-full max-h-80 object-cover rounded-lg"
                   onError={(e) => {
                     e.currentTarget.style.display = 'none';
                   }}
                 />
-                {sectionImage.visualSuggestion && (
-                  <p className="text-xs text-gray-500 mt-2 italic">{sectionImage.visualSuggestion}</p>
+                {section.visualSuggestion && (
+                  <p className="text-xs text-gray-500 mt-2 italic">{section.visualSuggestion}</p>
+                )}
+                {/* Refresh button overlay */}
+                <button
+                  onClick={() => handleFindImage(idx)}
+                  disabled={isSearching}
+                  className="absolute top-2 right-2 bg-white/90 hover:bg-white p-2 rounded-lg shadow opacity-0 group-hover:opacity-100 transition-opacity disabled:opacity-50"
+                  title="Переподобрать изображение"
+                >
+                  <RefreshCw size={18} className={isSearching ? 'animate-spin' : ''} />
+                </button>
+              </div>
+            ) : (
+              <div className="my-4">
+                {/* No image - show search button or progress */}
+                {currentProgress && isSearching ? (
+                  <div className="p-4 bg-blue-50 rounded-lg">
+                    <div className="flex justify-between items-center mb-2">
+                      <span className="text-sm font-medium">{currentProgress.message}</span>
+                      <span className="text-sm font-bold">{currentProgress.progress}%</span>
+                    </div>
+                    <div className="w-full bg-gray-200 rounded-full h-2">
+                      <div
+                        className="h-2 rounded-full bg-blue-500 transition-all"
+                        style={{ width: `${currentProgress.progress}%` }}
+                      />
+                    </div>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => handleFindImage(idx)}
+                    disabled={isSearching}
+                    className="flex items-center gap-2 px-4 py-2 bg-gray-100 hover:bg-gray-200 rounded-lg text-gray-700 transition disabled:opacity-50"
+                  >
+                    <ImagePlus size={18} />
+                    {isSearching ? 'Поиск...' : 'Подобрать изображение'}
+                  </button>
+                )}
+                {/* Show visual suggestion hint if available */}
+                {matchingFact?.visualSuggestion && !section.imageUrl && (
+                  <p className="text-xs text-gray-400 mt-2 italic">
+                    💡 Подсказка: {matchingFact.visualSuggestion}
+                  </p>
                 )}
               </div>
             )}

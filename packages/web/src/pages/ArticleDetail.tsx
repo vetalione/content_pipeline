@@ -270,7 +270,12 @@ export default function ArticleDetail() {
 
         {/* Generated Content */}
         {article.content && (
-          <ContentView content={article.content} researchData={article.researchData} />
+          <ContentView 
+            content={article.content} 
+            researchData={article.researchData}
+            articleId={article.id}
+            onUpdate={loadArticle}
+          />
         )}
 
         {/* Cover Generation */}

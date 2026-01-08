@@ -125,6 +125,12 @@ export interface ArticleSection {
   paragraph2: string;
   blockquote: string | null;
   
+  // Image from search
+  imageUrl?: string;
+  visualSuggestion?: string;
+  factId?: string;  // Links to research fact
+  year?: string;
+  
   // Legacy fields for backwards compatibility
   id?: string;
   order?: number;
