@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, Rocket } from 'lucide-react';
 import { api } from '../lib/api';
 
 interface FormData {
@@ -10,8 +10,9 @@ interface FormData {
 
 export default function NewArticle() {
   const navigate = useNavigate();
-  const { register, handleSubmit, formState: { errors } } = useForm<FormData>();
+  const { register, handleSubmit, formState: { errors }, getValues } = useForm<FormData>();
   const [loading, setLoading] = useState(false);
+  const [autopilotLoading, setAutopilotLoading] = useState(false);
   const [language, setLanguage] = useState<'ru' | 'en' | 'both'>('ru');
 
   const onSubmit = async (data: FormData) => {
@@ -38,6 +39,40 @@ export default function NewArticle() {
       console.error('Failed to create article:', error);
       alert('Ошибка при создании статьи');
       setLoading(false);
+    }
+  };
+
+  const onAutopilot = async () => {
+    const celebrityName = getValues('celebrityName');
+    if (!celebrityName?.trim()) {
+      alert('Введите имя знаменитости');
+      return;
+    }
+
+    try {
+      setAutopilotLoading(true);
+      
+      // Create article
+      const payload = { celebrityName, language };
+      const response = await api.post('/articles', payload);
+      const articleId = response.data.data.id;
+      
+      // Navigate first so Socket.IO connects
+      navigate(`/articles/${articleId}`);
+      
+      // Start autopilot after a brief delay
+      setTimeout(async () => {
+        try {
+          await api.post(`/pipeline/${articleId}/autopilot`);
+        } catch (error) {
+          console.error('Failed to start autopilot:', error);
+        }
+      }, 500);
+      
+    } catch (error) {
+      console.error('Failed to create article:', error);
+      alert('Ошибка при создании статьи');
+      setAutopilotLoading(false);
     }
   };
 
@@ -101,10 +136,25 @@ export default function NewArticle() {
         <div className="flex gap-3">
           <button
             type="submit"
-            disabled={loading}
+            disabled={loading || autopilotLoading}
             className="btn btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {loading ? 'Создаём...' : 'Создать и начать исследование'}
+          </button>
+          
+          <button
+            type="button"
+            onClick={onAutopilot}
+            disabled={loading || autopilotLoading}
+            className="btn flex-1 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+            style={{ 
+              background: 'linear-gradient(135deg, #667eea 0%, #764ba2 100%)',
+              color: 'white',
+              border: 'none'
+            }}
+          >
+            <Rocket size={18} />
+            {autopilotLoading ? 'Запускаем...' : 'Автопилот'}
           </button>
           
           <button

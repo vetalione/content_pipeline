@@ -16,6 +16,7 @@ export const researchQueue = new Queue('research', { connection });
 export const generationQueue = new Queue('generation', { connection });
 export const coverQueue = new Queue('cover', { connection });
 export const publishQueue = new Queue('publish', { connection });
+export const autopilotQueue = new Queue('autopilot', { connection });
 
 // Research Worker - using Perplexity for deep web search
 const researchWorker = new Worker('research', async (job) => {
@@ -110,4 +111,34 @@ const publishWorker = new Worker('publish', async (job) => {
 
 publishWorker.on('failed', (job, err) => {
   console.error(`Publish job ${job?.id} failed:`, err);
+});
+
+// Autopilot Worker - runs full pipeline automatically
+const autopilotWorker = new Worker('autopilot', async (job) => {
+  const { articleId } = job.data;
+  console.log(`🚀 Starting AUTOPILOT for article ${articleId}`);
+  
+  try {
+    const { runAutopilot } = await import('./ai/autopilot');
+    const result = await runAutopilot(articleId, (stage, progress, message) => {
+      // Emit progress to frontend
+      try {
+        const { getIO } = require('../lib/socket');
+        const io = getIO();
+        io.emit(`autopilot:progress:${articleId}`, { stage, progress, message });
+      } catch (e) {
+        console.log(`Autopilot progress: ${stage} - ${progress}% - ${message}`);
+      }
+    });
+    
+    console.log(`✅ Autopilot completed for article ${articleId}`);
+    return result;
+  } catch (error) {
+    console.error(`❌ Autopilot failed for article ${articleId}:`, error);
+    throw error;
+  }
+}, { connection });
+
+autopilotWorker.on('failed', (job, err) => {
+  console.error(`Autopilot job ${job?.id} failed:`, err);
 });

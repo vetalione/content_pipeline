@@ -1,5 +1,5 @@
 import { Router } from 'express';
-import { researchQueue, generationQueue, coverQueue } from '../services/queue';
+import { researchQueue, generationQueue, coverQueue, autopilotQueue } from '../services/queue';
 import { PipelineStage } from '@content-pipeline/shared';
 import { getCoverOptionsPreview } from '../services/media/cover';
 import { prisma } from '../lib/db';
@@ -23,6 +23,36 @@ pipelineRouter.post('/:articleId/research', async (req, res, next) => {
     res.json({
       success: true,
       message: `Research job queued (${action || 'start'})`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Start AUTOPILOT - full automated pipeline
+pipelineRouter.post('/:articleId/autopilot', async (req, res, next) => {
+  try {
+    const { articleId } = req.params;
+    
+    console.log(`🚀 Starting AUTOPILOT for article ${articleId}`);
+    
+    // Update article status
+    await prisma.article.update({
+      where: { id: articleId },
+      data: { 
+        status: 'PROCESSING',
+        currentStage: PipelineStage.RESEARCH
+      }
+    });
+    
+    await autopilotQueue.add('autopilot', {
+      articleId,
+      startedAt: new Date().toISOString()
+    });
+    
+    res.json({
+      success: true,
+      message: 'Autopilot started - full pipeline will run automatically'
     });
   } catch (error) {
     next(error);

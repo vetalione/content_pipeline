@@ -18,12 +18,19 @@ interface ResearchProgress {
   message?: string;
 }
 
+interface AutopilotProgress {
+  stage: string;
+  progress: number;
+  message: string;
+}
+
 export default function ArticleDetail() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
   const [article, setArticle] = useState<Article | null>(null);
   const [loading, setLoading] = useState(true);
   const [researchProgress, setResearchProgress] = useState<ResearchProgress | null>(null);
+  const [autopilotProgress, setAutopilotProgress] = useState<AutopilotProgress | null>(null);
 
   useEffect(() => {
     loadArticle();
@@ -73,6 +80,17 @@ export default function ArticleDetail() {
         percentage: 0,
         message: `Ошибка: ${error}`
       });
+    });
+
+    // Autopilot progress
+    socket.on(`autopilot:progress:${id}`, (progress: AutopilotProgress) => {
+      console.log('🚀 ArticleDetail: Autopilot progress:', progress);
+      setAutopilotProgress(progress);
+      
+      // On completion, reload article
+      if (progress.stage === 'complete' || progress.stage === 'error') {
+        loadArticle();
+      }
     });
 
     return () => {
@@ -165,6 +183,39 @@ export default function ArticleDetail() {
 
       {/* Stage Content */}
       <div className="space-y-6">
+        {/* Autopilot Progress */}
+        {autopilotProgress && autopilotProgress.stage !== 'complete' && (
+          <div className="card" style={{ background: 'linear-gradient(135deg, #667eea15 0%, #764ba215 100%)' }}>
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-2xl">🚀</span>
+              <h2 className="text-xl font-semibold">Автопилот</h2>
+            </div>
+            <div className="p-4 bg-white/80 rounded-lg">
+              <div className="flex justify-between items-center mb-2">
+                <span className="text-sm font-medium">
+                  {autopilotProgress.stage === 'starting' && '🚀 Запуск...'}
+                  {autopilotProgress.stage === 'research' && '🔬 Исследование'}
+                  {autopilotProgress.stage === 'images' && '🖼️ Поиск изображений'}
+                  {autopilotProgress.stage === 'generation' && '✍️ Генерация статьи'}
+                  {autopilotProgress.stage === 'cover' && '🎨 Создание обложки'}
+                  {autopilotProgress.stage === 'error' && '❌ Ошибка'}
+                </span>
+                <span className="text-sm font-bold">{autopilotProgress.progress}%</span>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-3 mb-2">
+                <div
+                  className={`h-3 rounded-full transition-all duration-500 ${
+                    autopilotProgress.stage === 'error' ? 'bg-red-500' :
+                    'bg-gradient-to-r from-indigo-500 to-purple-500'
+                  }`}
+                  style={{ width: `${autopilotProgress.progress}%` }}
+                />
+              </div>
+              <p className="text-sm text-gray-600">{autopilotProgress.message}</p>
+            </div>
+          </div>
+        )}
+
         {/* Research Progress (shown when no research data yet) */}
         {!article.researchData && researchProgress && researchProgress.status !== 'idle' && (
           <div className="card">
