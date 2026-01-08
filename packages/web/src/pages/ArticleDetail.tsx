@@ -219,7 +219,7 @@ export default function ArticleDetail() {
 
         {/* Generated Content */}
         {article.content && (
-          <ContentView content={article.content} />
+          <ContentView content={article.content} researchData={article.researchData} />
         )}
 
         {/* Cover Generation */}

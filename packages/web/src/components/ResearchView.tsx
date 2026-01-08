@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { ResearchData, BiographyFact } from '@content-pipeline/shared';
-import { ExternalLink, Edit2, Trash2, Square, RotateCcw, Search } from 'lucide-react';
+import { ExternalLink, Edit2, Trash2, Square, RotateCcw, Search, Plus } from 'lucide-react';
 import { io } from 'socket.io-client';
 import ImageSearchSettings, { ImageSearchConfig } from './ImageSearchSettings';
 
@@ -33,11 +33,15 @@ interface ImageSearchProgress {
 
 export default function ResearchView({ data, articleId, onUpdate }: Props) {
   const [facts, setFacts] = useState(data.facts || []);
+  const [quotes, setQuotes] = useState(data.quotes || []);
   const [editingFactId, setEditingFactId] = useState<string | null>(null);
+  const [editingQuoteId, setEditingQuoteId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any>(null);
+  const [quoteEditForm, setQuoteEditForm] = useState<any>(null);
   const [progress, setProgress] = useState<ResearchProgress | null>(null);
   const [regeneratingImageIds, setRegeneratingImageIds] = useState<Set<string>>(new Set());
   const [imageSearchProgress, setImageSearchProgress] = useState<ImageSearchProgress | null>(null);
+  const [generatingQuote, setGeneratingQuote] = useState(false);
   
   // Image search configuration (saved in localStorage)
   const [searchConfig, setSearchConfig] = useState<ImageSearchConfig>(() => {
@@ -280,6 +284,92 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
     }
   };
 
+  // Quote management functions
+  const handleEditQuoteClick = (quote: any) => {
+    setEditingQuoteId(quote.id);
+    setQuoteEditForm({
+      text: quote.text,
+      source: quote.source,
+      year: quote.year,
+    });
+  };
+
+  const handleSaveQuoteEdit = async () => {
+    if (!editingQuoteId || !quoteEditForm) return;
+    
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${API_URL}/api/articles/${articleId}/quotes/${editingQuoteId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(quoteEditForm),
+      });
+      
+      if (response.ok) {
+        setQuotes((prevQuotes: any[]) => 
+          prevQuotes.map(q => 
+            q.id === editingQuoteId 
+              ? { ...q, ...quoteEditForm, isEdited: true }
+              : q
+          )
+        );
+        setEditingQuoteId(null);
+        setQuoteEditForm(null);
+        onUpdate?.();
+      }
+    } catch (error) {
+      console.error('Failed to save quote edit:', error);
+    }
+  };
+
+  const handleDeleteQuote = async (quoteId: string) => {
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${API_URL}/api/articles/${articleId}/quotes/${quoteId}`, {
+        method: 'DELETE',
+      });
+      
+      if (response.ok) {
+        setQuotes((prevQuotes: any[]) => 
+          prevQuotes.map(q => 
+            q.id === quoteId 
+              ? { ...q, isDeleted: true }
+              : q
+          )
+        );
+        onUpdate?.();
+      }
+    } catch (error) {
+      console.error('Failed to delete quote:', error);
+    }
+  };
+
+  const handleAddQuote = async () => {
+    setGeneratingQuote(true);
+    try {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
+      const response = await fetch(`${API_URL}/api/articles/${articleId}/quotes/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          existingQuotes: quotes.filter((q: any) => !q.isDeleted).map((q: any) => q.text)
+        }),
+      });
+      
+      if (response.ok) {
+        const result = await response.json();
+        if (result.data?.quote) {
+          setQuotes((prevQuotes: any[]) => [...prevQuotes, result.data.quote]);
+        }
+        onUpdate?.();
+      }
+    } catch (error) {
+      console.error('Failed to generate quote:', error);
+    } finally {
+      setGeneratingQuote(false);
+    }
+  };
+
   const visibleFacts = (facts as BiographyFact[]).filter(f => !f.isDeleted);
 
   return (
@@ -318,6 +408,8 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
         </div>
       </div>
 
+      {/* Image Search Settings - FIRST THING VISIBLE */}
+      <ImageSearchSettings config={searchConfig} onChange={setSearchConfig} />
       {/* Progress Bar */}
       {progress && progress.status !== 'idle' && (
         <div className="mb-6 p-4 bg-blue-50 rounded-lg">
@@ -346,10 +438,6 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
           )}
         </div>
       )}
-
-      {/* Image Search Settings */}
-      <ImageSearchSettings config={searchConfig} onChange={setSearchConfig} />
-
 
       {/* Edit Modal */}
       {editingFactId && editForm && (
@@ -400,6 +488,65 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
                 </button>
                 <button
                   onClick={handleSaveEdit}
+                  className="btn btn-primary"
+                >
+                  Сохранить
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Quote Edit Modal */}
+      {editingQuoteId && quoteEditForm && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-lg p-6 max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+            <h3 className="text-xl font-semibold mb-4">Редактировать цитату</h3>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block text-sm font-medium mb-1">Текст цитаты</label>
+                <textarea
+                  className="w-full p-2 border rounded"
+                  rows={4}
+                  value={quoteEditForm.text}
+                  onChange={(e) => setQuoteEditForm({ ...quoteEditForm, text: e.target.value })}
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-1">Источник</label>
+                <input
+                  type="text"
+                  className="w-full p-2 border rounded"
+                  value={quoteEditForm.source || ''}
+                  onChange={(e) => setQuoteEditForm({ ...quoteEditForm, source: e.target.value })}
+                />
+              </div>
+              
+              <div>
+                <label className="block text-sm font-medium mb-1">Год</label>
+                <input
+                  type="number"
+                  className="w-full p-2 border rounded"
+                  value={quoteEditForm.year || ''}
+                  onChange={(e) => setQuoteEditForm({ ...quoteEditForm, year: parseInt(e.target.value) || undefined })}
+                />
+              </div>
+              
+              <div className="flex gap-2 justify-end">
+                <button
+                  onClick={() => {
+                    setEditingQuoteId(null);
+                    setQuoteEditForm(null);
+                  }}
+                  className="btn btn-secondary"
+                >
+                  Отмена
+                </button>
+                <button
+                  onClick={handleSaveQuoteEdit}
                   className="btn btn-primary"
                 >
                   Сохранить
@@ -581,13 +728,53 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
       </div>
 
       {/* Quotes */}
-      {data.quotes && data.quotes.length > 0 && (
+      {quotes.length > 0 && (
         <div className="mb-8">
-          <h3 className="text-lg font-semibold mb-4">💬 Цитаты ({data.quotes.length})</h3>
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="text-lg font-semibold">💬 Цитаты ({quotes.filter((q: any) => !q.isDeleted).length})</h3>
+            <button
+              onClick={handleAddQuote}
+              disabled={generatingQuote}
+              className="btn btn-secondary flex items-center gap-2 text-sm"
+            >
+              {generatingQuote ? (
+                <>
+                  <RotateCcw size={14} className="animate-spin" />
+                  Генерирую...
+                </>
+              ) : (
+                <>
+                  <Plus size={14} />
+                  Ещё цитата
+                </>
+              )}
+            </button>
+          </div>
           <div className="space-y-3">
-            {data.quotes.map((quote: any) => (
-              <div key={quote.id} className="p-4 bg-blue-50 border-l-4 border-blue-500">
-                <p className="italic text-gray-800 mb-2 break-words">"{quote.text}"</p>
+            {quotes.filter((q: any) => !q.isDeleted).map((quote: any) => (
+              <div key={quote.id} className="p-4 bg-blue-50 border-l-4 border-blue-500 relative group">
+                {/* Action buttons */}
+                <div className="absolute top-2 right-2 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button
+                    onClick={() => handleEditQuoteClick(quote)}
+                    className="p-1 bg-white rounded shadow hover:bg-blue-50"
+                    title="Редактировать"
+                  >
+                    <Edit2 size={16} className="text-blue-600" />
+                  </button>
+                  <button
+                    onClick={() => handleDeleteQuote(quote.id)}
+                    className="p-1 bg-white rounded shadow hover:bg-red-50"
+                    title="Удалить"
+                  >
+                    <Trash2 size={16} className="text-red-600" />
+                  </button>
+                </div>
+                
+                {quote.isEdited && (
+                  <div className="text-xs text-green-600 mb-1">✏️ Отредактировано</div>
+                )}
+                <p className="italic text-gray-800 mb-2 break-words pr-16">"{quote.text}"</p>
                 <p className="text-xs text-gray-600 break-words">
                   {quote.source} {quote.year && `(${quote.year})`}
                 </p>

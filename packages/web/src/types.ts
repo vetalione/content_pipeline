@@ -53,6 +53,10 @@ export interface ResearchData {
   quotes: Quote[];
   images: ImageReference[];
   sources: string[];
+  imageUrl?: string;
+  visualSuggestion?: string;
+  isDeleted?: boolean;
+  isEdited?: boolean;
   generatedAt: Date;
 }
 
@@ -64,6 +68,10 @@ export interface BiographyFact {
   year?: number;
   severity: 1 | 2 | 3 | 4 | 5;
   sources: string[];
+  imageUrl?: string;
+  visualSuggestion?: string;
+  isDeleted?: boolean;
+  isEdited?: boolean;
 }
 
 export interface Quote {

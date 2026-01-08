@@ -391,3 +391,174 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
   }
 });
 
+// Update a quote
+articlesRouter.put('/:id/quotes/:quoteId', async (req, res, next) => {
+  try {
+    const { id, quoteId } = req.params;
+    const { text, source, year } = req.body;
+    
+    const article = await prisma.article.findUnique({
+      where: { id }
+    });
+    
+    if (!article || !article.researchData) {
+      res.status(404).json({ success: false, message: 'Article not found' });
+      return;
+    }
+    
+    const researchData = article.researchData as any;
+    const quotes = researchData.quotes || [];
+    const quoteIndex = quotes.findIndex((q: any) => q.id === quoteId);
+    
+    if (quoteIndex === -1) {
+      res.status(404).json({ success: false, message: 'Quote not found' });
+      return;
+    }
+    
+    quotes[quoteIndex] = {
+      ...quotes[quoteIndex],
+      text,
+      source,
+      year,
+      isEdited: true
+    };
+    
+    await prisma.article.update({
+      where: { id },
+      data: {
+        researchData: {
+          ...researchData,
+          quotes
+        }
+      }
+    });
+    
+    res.json({ success: true, data: quotes[quoteIndex] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Delete a quote (soft delete)
+articlesRouter.delete('/:id/quotes/:quoteId', async (req, res, next) => {
+  try {
+    const { id, quoteId } = req.params;
+    
+    const article = await prisma.article.findUnique({
+      where: { id }
+    });
+    
+    if (!article || !article.researchData) {
+      res.status(404).json({ success: false, message: 'Article not found' });
+      return;
+    }
+    
+    const researchData = article.researchData as any;
+    const quotes = researchData.quotes || [];
+    const quoteIndex = quotes.findIndex((q: any) => q.id === quoteId);
+    
+    if (quoteIndex === -1) {
+      res.status(404).json({ success: false, message: 'Quote not found' });
+      return;
+    }
+    
+    quotes[quoteIndex] = {
+      ...quotes[quoteIndex],
+      isDeleted: true
+    };
+    
+    await prisma.article.update({
+      where: { id },
+      data: {
+        researchData: {
+          ...researchData,
+          quotes
+        }
+      }
+    });
+    
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Generate a new quote
+articlesRouter.post('/:id/quotes/generate', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    const { existingQuotes = [] } = req.body;
+    
+    const article = await prisma.article.findUnique({
+      where: { id }
+    });
+    
+    if (!article) {
+      res.status(404).json({ success: false, message: 'Article not found' });
+      return;
+    }
+    
+    // Use Gemini to generate a new quote
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-preview-05-20' });
+    
+    const prompt = `Найди ещё одну реальную цитату ${article.celebrityName}, которая отличается от уже существующих.
+
+Уже есть такие цитаты (НЕ повторяй их):
+${existingQuotes.map((q: string, i: number) => `${i + 1}. "${q}"`).join('\n')}
+
+Верни ТОЛЬКО JSON без markdown:
+{
+  "text": "текст новой цитаты",
+  "source": "источник цитаты (интервью, книга, выступление)",
+  "year": год (число или null)
+}`;
+
+    const result = await model.generateContent(prompt);
+    const responseText = result.response.text();
+    
+    // Parse JSON from response
+    let quoteData;
+    try {
+      const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        quoteData = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('No JSON found in response');
+      }
+    } catch (parseError) {
+      console.error('Failed to parse quote response:', responseText);
+      res.status(500).json({ success: false, message: 'Failed to parse generated quote' });
+      return;
+    }
+    
+    const newQuote = {
+      id: `quote-${Date.now()}`,
+      text: quoteData.text,
+      source: quoteData.source,
+      year: quoteData.year,
+      isGenerated: true
+    };
+    
+    // Update article with new quote
+    const researchData = (article.researchData as any) || {};
+    const quotes = researchData.quotes || [];
+    quotes.push(newQuote);
+    
+    await prisma.article.update({
+      where: { id },
+      data: {
+        researchData: {
+          ...researchData,
+          quotes
+        }
+      }
+    });
+    
+    res.json({ success: true, data: { quote: newQuote } });
+  } catch (error) {
+    console.error('Quote generation error:', error);
+    next(error);
+  }
+});

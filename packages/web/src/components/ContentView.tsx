@@ -1,11 +1,23 @@
-import { ArticleContent } from '../types';
+import { ArticleContent, ResearchData } from '../types';
 import { Edit } from 'lucide-react';
 
 interface Props {
   content: ArticleContent;
+  researchData?: ResearchData | null;
 }
 
-export default function ContentView({ content }: Props) {
+export default function ContentView({ content, researchData }: Props) {
+  // Get images from research facts
+  const factImages = researchData?.facts?.filter((f: any) => !f.isDeleted && f.imageUrl) || [];
+  
+  // Helper to get image for section index
+  const getImageForSection = (sectionIndex: number) => {
+    if (sectionIndex < factImages.length) {
+      return factImages[sectionIndex];
+    }
+    return null;
+  };
+
   return (
     <div className="card">
       <div className="flex justify-between items-start mb-6">
@@ -30,11 +42,31 @@ export default function ContentView({ content }: Props) {
 
       {/* Sections */}
       <div className="space-y-8 mb-8">
-        {content.sections?.map((section, idx) => (
+        {content.sections?.map((section, idx) => {
+          const sectionImage = getImageForSection(idx);
+          
+          return (
           <div key={section.number || section.id || idx} className="border-l-4 border-primary pl-6">
             <h3 className="text-2xl font-bold mb-4">
               {section.number || section.order}. {section.heading || section.title}
             </h3>
+            
+            {/* Section Image from Research */}
+            {sectionImage && (
+              <div className="my-4 rounded-lg overflow-hidden">
+                <img 
+                  src={sectionImage.imageUrl} 
+                  alt={sectionImage.visualSuggestion || sectionImage.title}
+                  className="w-full max-h-80 object-cover rounded-lg"
+                  onError={(e) => {
+                    e.currentTarget.style.display = 'none';
+                  }}
+                />
+                {sectionImage.visualSuggestion && (
+                  <p className="text-xs text-gray-500 mt-2 italic">{sectionImage.visualSuggestion}</p>
+                )}
+              </div>
+            )}
             
             {/* New format: paragraph1 + paragraph2 */}
             {section.paragraph1 && (
@@ -77,7 +109,7 @@ export default function ContentView({ content }: Props) {
               </div>
             )}
           </div>
-        ))}
+        )})}
       </div>
 
       {/* Conclusion */}
