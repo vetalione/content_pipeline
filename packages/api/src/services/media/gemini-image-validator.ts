@@ -194,7 +194,7 @@ export async function findBestImage(
   celebrityName: string,
   description: string,
   onProgress?: (progress: { stage: string; current: number; total: number; confidence?: number }) => void,
-  sources?: Array<'google-en' | 'google-ru' | 'brave'>,
+  sources?: Array<'google-en' | 'google-ru' | 'brave' | 'perplexity'>,
   confidenceThreshold: number = 85
 ): Promise<string | null> {
   if (imageUrls.length === 0) {

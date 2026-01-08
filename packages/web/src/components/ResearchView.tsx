@@ -50,7 +50,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
       }
     }
     return {
-      sources: { google: true, brave: true },
+      sources: { google: true, brave: true, perplexity: true },
       confidenceThreshold: 85,
       resultsPerSource: 5
     };
@@ -234,6 +234,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
         body: JSON.stringify({
           useGoogle: searchConfig.sources.google,
           useBrave: searchConfig.sources.brave,
+          usePerplexity: searchConfig.sources.perplexity,
           confidenceThreshold: searchConfig.confidenceThreshold,
           resultsPerSource: searchConfig.resultsPerSource
         })

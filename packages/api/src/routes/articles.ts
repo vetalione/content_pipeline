@@ -262,7 +262,7 @@ articlesRouter.post('/:id/facts/:factId/regenerate-image', async (req, res, next
 articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
   try {
     const { id: articleId, factId } = req.params;
-    const { useGoogle = true, useBrave = true, confidenceThreshold = 85, resultsPerSource = 5 } = req.body || {};
+    const { useGoogle = true, useBrave = true, usePerplexity = true, confidenceThreshold = 85, resultsPerSource = 5 } = req.body || {};
     
     // Get article with research data
     const article = await prisma.article.findUnique({
@@ -321,6 +321,7 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
       {
         useGoogle,
         useBrave,
+        usePerplexity,
         confidenceThreshold,
         resultsPerSource
       }

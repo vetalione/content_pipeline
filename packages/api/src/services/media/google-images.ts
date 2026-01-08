@@ -5,6 +5,7 @@
 
 import { findBestImage } from './gemini-image-validator';
 import { searchBraveImages } from './brave-images';
+import { searchPerplexityImages } from './perplexity-images';
 
 /**
  * Dictionary of known celebrity name translations (Russian → English)
@@ -322,6 +323,7 @@ function isEnglishName(name: string): boolean {
 export interface ImageSearchOptions {
   useGoogle?: boolean;
   useBrave?: boolean;
+  usePerplexity?: boolean;
   confidenceThreshold?: number;
   resultsPerSource?: number;
 }
@@ -343,6 +345,7 @@ export async function findFactImage(
   const {
     useGoogle = true,
     useBrave = true,
+    usePerplexity = true,
     confidenceThreshold = 85,
     resultsPerSource = 5
   } = options || {};
@@ -396,70 +399,53 @@ export async function findFactImage(
   // Search both sources in parallel for better coverage and rare images
   interface ImageCandidate {
     url: string;
-    source: 'google-en' | 'google-ru' | 'brave';
+    source: 'google-en' | 'google-ru' | 'brave' | 'perplexity';
   }
   
   let allCandidates: ImageCandidate[] = [];
   
-  console.log(`  🔍 Searching: Google=${useGoogle}, Brave=${useBrave}, resultsPerSource=${resultsPerSource}`);
+  console.log(`  🔍 Searching: Google=${useGoogle}, Brave=${useBrave}, Perplexity=${usePerplexity}, resultsPerSource=${resultsPerSource}`);
   
-  if (ruQuery) {
-    // Parallel search: Google EN, Google RU, Brave EN (for Russian names)
-    const searches: Promise<string[]>[] = [];
-    const sources: Array<'google-en' | 'google-ru' | 'brave'> = [];
+  // Build search description for Perplexity (more context-aware)
+  const searchDescription = visualSuggestion || `${englishName} ${factTitle}`;
+  
+  // Parallel search: all enabled sources
+  const searches: Promise<string[]>[] = [];
+  const sources: Array<'google-en' | 'google-ru' | 'brave' | 'perplexity'> = [];
+  
+  if (useGoogle) {
+    searches.push(searchGoogleImages(enQuery, resultsPerSource));
+    sources.push('google-en');
     
-    if (useGoogle) {
-      searches.push(searchGoogleImages(enQuery, resultsPerSource));
-      sources.push('google-en');
+    // Add Russian query for Russian celebrities
+    if (ruQuery) {
       searches.push(searchGoogleImages(ruQuery, Math.max(3, Math.floor(resultsPerSource * 0.8))));
       sources.push('google-ru');
     }
-    
-    if (useBrave) {
-      searches.push(searchBraveImages(enQuery, resultsPerSource));
-      sources.push('brave');
-    }
-    
-    if (searches.length === 0) {
-      console.log(`  ⚠️ No search engines enabled`);
-      return null;
-    }
-    
-    const results = await Promise.all(searches);
-    let sourceIndex = 0;
-    results.forEach(urls => {
-      const source = sources[sourceIndex++];
-      console.log(`  📊 ${source}: ${urls.length} results`);
-      allCandidates.push(...urls.map(url => ({ url, source })));
-    });
-  } else {
-    // Parallel search: Google + Brave (non-Russian)
-    const searches: Promise<string[]>[] = [];
-    const sources: Array<'google-en' | 'brave'> = [];
-    
-    if (useGoogle) {
-      searches.push(searchGoogleImages(enQuery, resultsPerSource));
-      sources.push('google-en');
-    }
-    
-    if (useBrave) {
-      searches.push(searchBraveImages(enQuery, resultsPerSource));
-      sources.push('brave');
-    }
-    
-    if (searches.length === 0) {
-      console.log(`  ⚠️ No search engines enabled`);
-      return null;
-    }
-    
-    const results = await Promise.all(searches);
-    let sourceIndex = 0;
-    results.forEach(urls => {
-      const source = sources[sourceIndex++];
-      console.log(`  📊 ${source}: ${urls.length} results`);
-      allCandidates.push(...urls.map(url => ({ url, source })));
-    });
   }
+  
+  if (useBrave) {
+    searches.push(searchBraveImages(enQuery, resultsPerSource));
+    sources.push('brave');
+  }
+  
+  if (usePerplexity) {
+    searches.push(searchPerplexityImages(searchDescription, resultsPerSource));
+    sources.push('perplexity');
+  }
+  
+  if (searches.length === 0) {
+    console.log(`  ⚠️ No search engines enabled`);
+    return null;
+  }
+  
+  const results = await Promise.all(searches);
+  let sourceIndex = 0;
+  results.forEach(urls => {
+    const source = sources[sourceIndex++];
+    console.log(`  📊 ${source}: ${urls.length} results`);
+    allCandidates.push(...urls.map(url => ({ url, source })));
+  });
   
   // Remove duplicates by URL, keeping first occurrence (preserves source)
   const seen = new Set<string>();
