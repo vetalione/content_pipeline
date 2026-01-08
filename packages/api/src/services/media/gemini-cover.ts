@@ -258,58 +258,105 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
       }
     };
 
-    // Call gemini-3-pro-image-preview REST API for 4K image generation
-    const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent`,
-      {
-        method: 'POST',
-        headers: {
-          'x-goog-api-key': apiKey,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(requestBody),
-      }
-    );
-
-    if (!response.ok) {
-      const errorData = await response.json() as any;
-      console.error('❌ Gemini 3 Pro Image API Error:', errorData);
-      throw new Error(JSON.stringify(errorData.error));
-    }
-
-    const data = await response.json() as any;
+    // Retry logic with increased timeout
+    const maxRetries = 3;
+    let lastError: Error | null = null;
     
-    // Extract image from response
-    let imageBase64: string | null = null;
-    
-    if (data.candidates && data.candidates[0]?.content?.parts) {
-      for (const part of data.candidates[0].content.parts) {
-        if (part.inlineData?.data) {
-          imageBase64 = part.inlineData.data;
-          break;
+    for (let attempt = 1; attempt <= maxRetries; attempt++) {
+      try {
+        console.log(`🔄 Attempt ${attempt}/${maxRetries} to generate cover...`);
+        
+        // Create AbortController for timeout (2 minutes for image generation)
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 120000);
+        
+        // Call gemini-3-pro-image-preview REST API for 4K image generation
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent`,
+          {
+            method: 'POST',
+            headers: {
+              'x-goog-api-key': apiKey,
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify(requestBody),
+            signal: controller.signal,
+          }
+        );
+        
+        clearTimeout(timeoutId);
+
+        if (!response.ok) {
+          const errorData = await response.json() as any;
+          console.error('❌ Gemini 3 Pro Image API Error:', errorData);
+          
+          // Check if it's a rate limit or overload error - retry
+          const errorMessage = JSON.stringify(errorData.error);
+          if (errorMessage.includes('overloaded') || errorMessage.includes('rate') || errorMessage.includes('503') || errorMessage.includes('429')) {
+            console.log(`⏳ API overloaded, waiting before retry...`);
+            await new Promise(resolve => setTimeout(resolve, 10000 * attempt)); // 10s, 20s, 30s
+            lastError = new Error(errorMessage);
+            continue;
+          }
+          
+          throw new Error(errorMessage);
         }
+
+        const data = await response.json() as any;
+    
+        // Extract image from response
+        let imageBase64: string | null = null;
+        
+        if (data.candidates && data.candidates[0]?.content?.parts) {
+          for (const part of data.candidates[0].content.parts) {
+            if (part.inlineData?.data) {
+              imageBase64 = part.inlineData.data;
+              break;
+            }
+          }
+        }
+
+        if (!imageBase64) {
+          console.error('Response structure:', JSON.stringify(data, null, 2).substring(0, 1000));
+          throw new Error('No image in response');
+        }
+        
+        const coversDir = path.join(process.cwd(), 'covers');
+        await fs.mkdir(coversDir, { recursive: true });
+        
+        const fileName = `cover_${Date.now()}.jpg`;
+        const filePath = path.join(coversDir, fileName);
+        
+        await fs.writeFile(filePath, Buffer.from(imageBase64, 'base64'));
+        
+        console.log('✅ Cover image generated and saved:', filePath);
+
+        return {
+          success: true,
+          imageBase64,
+          imagePath: filePath,
+        };
+      } catch (retryError: any) {
+        lastError = retryError;
+        console.error(`❌ Attempt ${attempt} failed:`, retryError.message);
+        
+        // Check if it's a timeout or network error - retry
+        if (retryError.name === 'AbortError' || retryError.message?.includes('timeout') || retryError.message?.includes('fetch failed')) {
+          console.log(`⏳ Network/timeout error, waiting before retry...`);
+          await new Promise(resolve => setTimeout(resolve, 5000 * attempt)); // 5s, 10s, 15s
+          continue;
+        }
+        
+        // Other errors - don't retry
+        break;
       }
     }
-
-    if (!imageBase64) {
-      console.error('Response structure:', JSON.stringify(data, null, 2).substring(0, 1000));
-      throw new Error('No image in response');
-    }
     
-    const coversDir = path.join(process.cwd(), 'covers');
-    await fs.mkdir(coversDir, { recursive: true });
-    
-    const fileName = `cover_${Date.now()}.jpg`;
-    const filePath = path.join(coversDir, fileName);
-    
-    await fs.writeFile(filePath, Buffer.from(imageBase64, 'base64'));
-    
-    console.log('✅ Cover image generated and saved:', filePath);
-
+    // All retries exhausted
+    console.error('❌ All retries exhausted for cover generation');
     return {
-      success: true,
-      imageBase64,
-      imagePath: filePath,
+      success: false,
+      error: lastError?.message || 'Failed to generate cover image after retries',
     };
   } catch (error: any) {
     console.error('❌ Gemini 3 Pro Image generation error:', error);
