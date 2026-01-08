@@ -483,7 +483,7 @@ articlesRouter.delete('/:id/quotes/:quoteId', async (req, res, next) => {
   }
 });
 
-// Generate a new quote
+// Search for a new real quote via Perplexity
 articlesRouter.post('/:id/quotes/generate', async (req, res, next) => {
   try {
     const { id } = req.params;
@@ -498,25 +498,63 @@ articlesRouter.post('/:id/quotes/generate', async (req, res, next) => {
       return;
     }
     
-    // Use Gemini to generate a new quote
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || '');
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash-preview-05-20' });
+    console.log(`🔍 Searching for new quote for ${article.celebrityName} via Perplexity...`);
+    console.log(`📋 Existing quotes to exclude: ${existingQuotes.length}`);
     
-    const prompt = `Найди ещё одну реальную цитату ${article.celebrityName}, которая отличается от уже существующих.
+    // Use Perplexity to search for real quotes
+    const PERPLEXITY_API_KEY = process.env.PERPLEXITY_API_KEY;
+    if (!PERPLEXITY_API_KEY) {
+      throw new Error('PERPLEXITY_API_KEY not configured');
+    }
+    
+    const existingQuotesText = existingQuotes.length > 0 
+      ? `\n\nУже найденные цитаты (НЕ повторяй их):\n${existingQuotes.map((q: string, i: number) => `${i + 1}. "${q}"`).join('\n')}`
+      : '';
+    
+    const response = await fetch('https://api.perplexity.ai/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${PERPLEXITY_API_KEY}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'sonar-pro',
+        messages: [
+          {
+            role: 'system',
+            content: `Ты исследователь цитат. Твоя задача - найти РЕАЛЬНУЮ, ЗАДОКУМЕНТИРОВАННУЮ цитату известной личности. 
+Цитата должна быть из проверенного источника (интервью, книга, выступление, официальное заявление).
+НЕ выдумывай цитаты. Если не можешь найти реальную цитату - так и скажи.
+Верни ТОЛЬКО JSON без markdown.`
+          },
+          {
+            role: 'user',
+            content: `Найди реальную цитату ${article.celebrityName} из достоверного источника.${existingQuotesText}
 
-Уже есть такие цитаты (НЕ повторяй их):
-${existingQuotes.map((q: string, i: number) => `${i + 1}. "${q}"`).join('\n')}
-
-Верни ТОЛЬКО JSON без markdown:
+Верни JSON:
 {
-  "text": "текст новой цитаты",
-  "source": "источник цитаты (интервью, книга, выступление)",
-  "year": год (число или null)
-}`;
-
-    const result = await model.generateContent(prompt);
-    const responseText = result.response.text();
+  "text": "точный текст цитаты",
+  "source": "источник (название интервью/книги/издания)",
+  "year": год (число или null),
+  "found": true/false (нашлась ли реальная цитата)
+}`
+          }
+        ],
+        temperature: 0.1,
+        max_tokens: 500,
+      }),
+    });
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('Perplexity API error:', errorText);
+      throw new Error(`Perplexity API error: ${response.status}`);
+    }
+    
+    const data = await response.json() as any;
+    const responseText = data.choices?.[0]?.message?.content || '';
+    
+    console.log('📝 Perplexity response:', responseText);
     
     // Parse JSON from response
     let quoteData;
@@ -529,16 +567,21 @@ ${existingQuotes.map((q: string, i: number) => `${i + 1}. "${q}"`).join('\n')}
       }
     } catch (parseError) {
       console.error('Failed to parse quote response:', responseText);
-      res.status(500).json({ success: false, message: 'Failed to parse generated quote' });
+      res.status(500).json({ success: false, message: 'Не удалось распознать ответ Perplexity' });
+      return;
+    }
+    
+    if (!quoteData.found || !quoteData.text) {
+      res.status(404).json({ success: false, message: 'Не удалось найти новую реальную цитату' });
       return;
     }
     
     const newQuote = {
       id: `quote-${Date.now()}`,
       text: quoteData.text,
-      source: quoteData.source,
+      source: quoteData.source || 'Неизвестный источник',
       year: quoteData.year,
-      isGenerated: true
+      isSearched: true // Mark as searched, not generated
     };
     
     // Update article with new quote
@@ -555,6 +598,8 @@ ${existingQuotes.map((q: string, i: number) => `${i + 1}. "${q}"`).join('\n')}
         }
       }
     });
+    
+    console.log(`✅ Found new quote: "${newQuote.text.substring(0, 50)}..."`);
     
     res.json({ success: true, data: { quote: newQuote } });
   } catch (error) {
