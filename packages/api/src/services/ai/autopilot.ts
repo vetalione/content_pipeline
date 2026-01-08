@@ -79,27 +79,44 @@ export async function runAutopilot(
         const section = sections[i];
         const progressPercent = 45 + Math.round((i / sections.length) * 35);
         
-        emit('images', progressPercent, `Подбираем изображение ${i + 1}/${sections.length}: ${section.title.substring(0, 40)}...`);
+        const sectionTitle = section.heading || section.title || `Секция ${i + 1}`;
+        emit('images', progressPercent, `Подбираем изображение ${i + 1}/${sections.length}: ${sectionTitle.substring(0, 40)}...`);
         
         try {
-          // Find matching fact by similar title to get visualSuggestion
-          const matchingFact = facts.find((f: any) => 
-            !f.isDeleted && (
-              f.title.toLowerCase().includes(section.title.toLowerCase().substring(0, 20)) ||
-              section.title.toLowerCase().includes(f.title.toLowerCase().substring(0, 20))
-            )
-          );
+          // Find matching fact by factId (primary) or fallback to title matching
+          let matchingFact = null;
+          
+          // Primary: match by factId from Claude's output
+          if (section.factId) {
+            matchingFact = facts.find((f: any) => f.id === section.factId && !f.isDeleted);
+            if (matchingFact) {
+              console.log(`  ✅ Section ${i + 1}: matched by factId "${section.factId}"`);
+            }
+          }
+          
+          // Fallback: match by similar title
+          if (!matchingFact) {
+            matchingFact = facts.find((f: any) => 
+              !f.isDeleted && (
+                f.title.toLowerCase().includes(sectionTitle.toLowerCase().substring(0, 20)) ||
+                sectionTitle.toLowerCase().includes(f.title.toLowerCase().substring(0, 20))
+              )
+            );
+            if (matchingFact) {
+              console.log(`  ⚠️ Section ${i + 1}: matched by title similarity to fact "${matchingFact.title}"`);
+            }
+          }
           
           // Build visual suggestion from fact or section context
           const visualSuggestion = matchingFact?.visualSuggestion || 
-            `${article.celebrityName} - ${section.title}`;
+            `${article.celebrityName} - ${sectionTitle}`;
           
           // Extract year from fact or section
           const year = matchingFact?.year || section.year || '';
           
           const imageUrl = await findFactImage(
             article.celebrityName,
-            section.title,
+            sectionTitle,
             year,
             visualSuggestion,
             undefined,
