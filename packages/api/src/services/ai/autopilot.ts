@@ -1,8 +1,8 @@
 /**
  * Autopilot - Runs the full content pipeline automatically
- * 1. Research (facts + quotes)
- * 2. Find images for each fact
- * 3. Generate article
+ * 1. Research (facts + quotes + visualSuggestions)
+ * 2. Generate article (sections)
+ * 3. Find images for each SECTION in the generated article
  * 4. Generate cover
  */
 
@@ -44,70 +44,10 @@ export async function runAutopilot(
     const { performPerplexityResearch } = await import('./perplexity-research');
     await performPerplexityResearch(articleId, 'normal');
     
-    emit('research', 25, 'Исследование завершено, найдены факты и цитаты');
+    emit('research', 20, 'Исследование завершено, найдены факты и цитаты');
 
-    // ============ STAGE 2: FIND IMAGES ============
-    emit('images', 30, 'Подбираем изображения для фактов...');
-
-    // Reload article to get research data
-    const articleWithResearch = await prisma.article.findUnique({
-      where: { id: articleId }
-    });
-    
-    const researchData = articleWithResearch?.researchData as any;
-    const facts = researchData?.facts || [];
-    const visibleFacts = facts.filter((f: any) => !f.isDeleted);
-    
-    if (visibleFacts.length > 0) {
-      const { findFactImage } = await import('../media/google-images');
-      
-      // Find images for first 5 facts (to save time)
-      const factsToProcess = visibleFacts.slice(0, 5);
-      
-      for (let i = 0; i < factsToProcess.length; i++) {
-        const fact = factsToProcess[i];
-        const progressPercent = 30 + Math.round((i / factsToProcess.length) * 20);
-        
-        emit('images', progressPercent, `Подбираем изображение ${i + 1}/${factsToProcess.length}: ${fact.title.substring(0, 40)}...`);
-        
-        try {
-          const imageUrl = await findFactImage(
-            article.celebrityName,
-            fact.title,
-            fact.year,
-            fact.visualSuggestion,
-            undefined, // no progress callback for individual images
-            { confidenceThreshold: 70, resultsPerSource: 5 }
-          );
-          
-          if (imageUrl) {
-            // Update fact with image
-            const updatedFacts = facts.map((f: any) => 
-              f.id === fact.id ? { ...f, imageUrl } : f
-            );
-            
-            await prisma.article.update({
-              where: { id: articleId },
-              data: {
-                researchData: { ...researchData, facts: updatedFacts }
-              }
-            });
-            
-            // Reload research data for next iteration
-            const reloaded = await prisma.article.findUnique({ where: { id: articleId } });
-            Object.assign(researchData, reloaded?.researchData);
-          }
-        } catch (imgError) {
-          console.error(`Failed to find image for fact ${fact.id}:`, imgError);
-          // Continue with other facts
-        }
-      }
-    }
-    
-    emit('images', 50, 'Изображения подобраны');
-
-    // ============ STAGE 3: GENERATE ARTICLE ============
-    emit('generation', 55, 'Генерируем статью...');
+    // ============ STAGE 2: GENERATE ARTICLE ============
+    emit('generation', 25, 'Генерируем статью...');
     
     await prisma.article.update({
       where: { id: articleId },
@@ -117,10 +57,81 @@ export async function runAutopilot(
     const { generateContent } = await import('./generator');
     await generateContent(articleId);
     
-    emit('generation', 75, 'Статья сгенерирована');
+    emit('generation', 40, 'Статья сгенерирована');
+
+    // ============ STAGE 3: FIND IMAGES FOR SECTIONS ============
+    emit('images', 45, 'Подбираем изображения для секций статьи...');
+
+    // Reload article to get generated content and research data
+    const articleWithContent = await prisma.article.findUnique({
+      where: { id: articleId }
+    });
+    
+    const content = articleWithContent?.content as any;
+    const researchData = articleWithContent?.researchData as any;
+    const sections = content?.sections || [];
+    const facts = researchData?.facts || [];
+    
+    if (sections.length > 0) {
+      const { findFactImage } = await import('../media/google-images');
+      
+      for (let i = 0; i < sections.length; i++) {
+        const section = sections[i];
+        const progressPercent = 45 + Math.round((i / sections.length) * 35);
+        
+        emit('images', progressPercent, `Подбираем изображение ${i + 1}/${sections.length}: ${section.title.substring(0, 40)}...`);
+        
+        try {
+          // Find matching fact by similar title to get visualSuggestion
+          const matchingFact = facts.find((f: any) => 
+            !f.isDeleted && (
+              f.title.toLowerCase().includes(section.title.toLowerCase().substring(0, 20)) ||
+              section.title.toLowerCase().includes(f.title.toLowerCase().substring(0, 20))
+            )
+          );
+          
+          // Build visual suggestion from fact or section context
+          const visualSuggestion = matchingFact?.visualSuggestion || 
+            `${article.celebrityName} - ${section.title}`;
+          
+          // Extract year from fact or section
+          const year = matchingFact?.year || section.year || '';
+          
+          const imageUrl = await findFactImage(
+            article.celebrityName,
+            section.title,
+            year,
+            visualSuggestion,
+            undefined,
+            { confidenceThreshold: 65, resultsPerSource: 5 }
+          );
+          
+          if (imageUrl) {
+            // Update section with image
+            sections[i] = { ...section, imageUrl };
+            
+            // Save updated content
+            await prisma.article.update({
+              where: { id: articleId },
+              data: {
+                content: { ...content, sections }
+              }
+            });
+          }
+        } catch (imgError) {
+          console.error(`Failed to find image for section ${i + 1}:`, imgError);
+          // Continue with other sections
+        }
+      }
+      
+      const sectionsWithImages = sections.filter((s: any) => s.imageUrl).length;
+      console.log(`📸 Found images for ${sectionsWithImages}/${sections.length} sections`);
+    }
+    
+    emit('images', 80, 'Изображения подобраны');
 
     // ============ STAGE 4: GENERATE COVER ============
-    emit('cover', 80, 'Генерируем обложку...');
+    emit('cover', 85, 'Генерируем обложку...');
     
     await prisma.article.update({
       where: { id: articleId },
@@ -128,7 +139,7 @@ export async function runAutopilot(
     });
 
     const { generateCover } = await import('../media/cover');
-    await generateCover(articleId, 'celebrity');  // Use default celebrity template
+    await generateCover(articleId, 'celebrity');
     
     emit('cover', 95, 'Обложка сгенерирована');
 

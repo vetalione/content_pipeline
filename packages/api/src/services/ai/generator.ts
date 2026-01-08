@@ -79,27 +79,8 @@ export async function generateContent(
     }
   }
   
-  // Match sections with images from research data
-  const researchDataObj = article.researchData as any;
-  const facts = researchDataObj?.facts || [];
-  if (content.sections && facts.length > 0) {
-    content.sections = content.sections.map((section: any, index: number) => {
-      // Try to match section with corresponding fact by index
-      const matchingFact = facts[index];
-      if (matchingFact?.imageUrl) {
-        console.log(`  📸 Section ${index + 1}: matched image from fact "${matchingFact.title}"`);
-        return {
-          ...section,
-          imageUrl: matchingFact.imageUrl,
-          visualSuggestion: matchingFact.visualSuggestion
-        };
-      }
-      return section;
-    });
-    
-    const sectionsWithImages = content.sections.filter((s: any) => s.imageUrl).length;
-    console.log(`📸 Matched ${sectionsWithImages}/${content.sections.length} sections with images from research`);
-  }
+  // Note: Image matching is now done in autopilot.ts AFTER article generation
+  // This allows us to search images specifically for the generated sections
   
   // Save to database
   await prisma.article.update({
