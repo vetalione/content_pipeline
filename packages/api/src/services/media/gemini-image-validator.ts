@@ -109,31 +109,33 @@ export async function validateImageRelevance(
 
     const base64Image = Buffer.from(imageData.buffer).toString('base64');
 
-    // Smart prompt that understands we're looking for ILLUSTRATION, not documentary evidence
-    const prompt = `You are an image validator for a biography article. Evaluate if this image could ILLUSTRATE the following about "${celebrityName}":
+    // Prompt that REQUIRES the celebrity to be in the photo
+    const prompt = `You are an image validator for a biography article about "${celebrityName}".
 
-TOPIC/SCENE: "${description}"
+REQUIREMENT: "${celebrityName}" MUST be visible in this photo. We need photos OF this specific person.
 
-IMPORTANT CONTEXT:
-- We are looking for images that could ILLUSTRATE a biographical fact
-- Some specific scenes may not have been photographed (private moments, childhood abuse, etc.)
-- In such cases, a thematically related image is acceptable
+TOPIC/SCENE to illustrate: "${description}"
 
-SCORING GUIDE:
-- 90-100: PERFECT match - person confirmed, exact scene/context as described
-- 75-89: GREAT match - person confirmed, very close context (same era, similar setting)
-- 60-74: GOOD match - person confirmed, thematically related (could illustrate the topic)
-- 45-59: ACCEPTABLE - person confirmed, generic photo that doesn't contradict the topic
-- 30-44: WEAK - person might be there, or context seems unrelated
-- 0-29: REJECT - wrong person, or image contradicts the description
+CRITICAL RULES:
+1. The celebrity "${celebrityName}" MUST be in the photo - this is MANDATORY
+2. Stock photos, random people, or thematic images WITHOUT the celebrity = REJECT (0-20%)
+3. Childhood/young photos: the person may look different, but it must BE them
+4. If you cannot identify "${celebrityName}" in the image = REJECT
 
-EXAMPLES:
-- Description: "childhood with abusive father" → Photo of person as child = 70-80% (illustrates childhood era)
-- Description: "youth soccer team 1990s" → Adult in suit = 25% (wrong era/context)
-- Description: "bankruptcy announcement" → Person looking stressed at podium = 65% (thematically fits)
-- Description: "early career struggles" → Young person performing = 75% (illustrates early career)
+SCORING (only if celebrity IS in photo):
+- 85-100: Celebrity confirmed + context matches description well
+- 70-84: Celebrity confirmed + context partially matches (similar era/theme)
+- 55-69: Celebrity confirmed + generic photo (doesn't contradict topic)
+- 40-54: Celebrity probably there but hard to confirm
+- 0-39: Celebrity NOT in photo, or wrong person, or contradicts description
 
-JSON only: {"isRelevant": bool, "confidence": num, "reasoning": "brief"}`;
+EXAMPLES for "${celebrityName}":
+- Childhood photo of the actual person = 65-80% (they look different young, but it's them)
+- Adult photo when description says "childhood" = 35-45% (wrong era but right person)
+- Random child photo that's NOT the celebrity = 0-15% (WRONG PERSON)
+- Stock photo of generic scene = 0-10% (celebrity not present)
+
+JSON only: {"isRelevant": bool, "confidence": num, "reasoning": "brief - explain if celebrity is visible"}`;
 
     const result = await model.generateContent([
       { inlineData: { data: base64Image, mimeType: imageData.mimeType } },
