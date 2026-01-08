@@ -172,11 +172,11 @@ export default function ContentView({ content, researchData, articleId, onUpdate
             
             {/* Section Image */}
             {section.imageUrl ? (
-              <div className="my-4 rounded-lg overflow-hidden relative group">
+              <div className="my-4 rounded-lg overflow-hidden relative group bg-gray-100">
                 <img 
                   src={section.imageUrl} 
                   alt={section.visualSuggestion || section.heading || section.title}
-                  className="w-full max-h-80 object-cover rounded-lg"
+                  className="w-full max-h-96 object-contain rounded-lg"
                   onError={(e) => {
                     e.currentTarget.style.display = 'none';
                   }}
