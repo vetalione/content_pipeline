@@ -36,7 +36,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
   const [editingFactId, setEditingFactId] = useState<string | null>(null);
   const [editForm, setEditForm] = useState<any>(null);
   const [progress, setProgress] = useState<ResearchProgress | null>(null);
-  const [regeneratingImageId, setRegeneratingImageId] = useState<string | null>(null);
+  const [regeneratingImageIds, setRegeneratingImageIds] = useState<Set<string>>(new Set());
   const [imageSearchProgress, setImageSearchProgress] = useState<ImageSearchProgress | null>(null);
   
   // Image search configuration (saved in localStorage)
@@ -215,7 +215,8 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
 
   // Find image with Gemini validation and progress
   const handleFindImage = async (factId: string) => {
-    setRegeneratingImageId(factId);
+    // Add to set of regenerating images (allows parallel searches)
+    setRegeneratingImageIds(prev => new Set(prev).add(factId));
     setImageSearchProgress({
       articleId,
       factId,
@@ -270,7 +271,12 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
         message: error instanceof Error ? error.message : 'Unknown error'
       });
     } finally {
-      setRegeneratingImageId(null);
+      // Remove from set of regenerating images
+      setRegeneratingImageIds(prev => {
+        const newSet = new Set(prev);
+        newSet.delete(factId);
+        return newSet;
+      });
     }
   };
 
@@ -462,7 +468,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
                   </div>
                   
                   {/* Show progress bar if re-searching for this fact's image */}
-                  {imageSearchProgress && imageSearchProgress.factId === fact.id && regeneratingImageId === fact.id ? (
+                  {imageSearchProgress && imageSearchProgress.factId === fact.id && regeneratingImageIds.has(fact.id) ? (
                     <div className="mt-2 space-y-2">
                       <div className="flex items-center gap-2">
                         <RotateCcw size={12} className="animate-spin text-blue-600" />
@@ -488,7 +494,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
                   ) : (
                     <button
                       onClick={() => handleFindImage(fact.id)}
-                      disabled={regeneratingImageId === fact.id}
+                      disabled={regeneratingImageIds.has(fact.id)}
                       className="mt-2 text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Найти альтернативную картинку"
                     >
@@ -507,7 +513,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
                   )}
                   
                   {/* Show progress bar when searching for this fact's image */}
-                  {imageSearchProgress && imageSearchProgress.factId === fact.id && regeneratingImageId === fact.id ? (
+                  {imageSearchProgress && imageSearchProgress.factId === fact.id && regeneratingImageIds.has(fact.id) ? (
                     <div className="space-y-2">
                       <div className="flex items-center gap-2">
                         <Search size={12} className="animate-pulse text-blue-600" />
@@ -533,7 +539,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
                   ) : (
                     <button
                       onClick={() => handleFindImage(fact.id)}
-                      disabled={regeneratingImageId === fact.id}
+                      disabled={regeneratingImageIds.has(fact.id)}
                       className="text-xs text-blue-600 hover:text-blue-800 flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Найти картинку через Google + Brave"
                     >
