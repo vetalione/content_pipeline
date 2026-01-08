@@ -109,14 +109,29 @@ export async function validateImageRelevance(
 
     const base64Image = Buffer.from(imageData.buffer).toString('base64');
 
-    // Compact prompt for faster response
-    const prompt = `Analyze image. Is "${celebrityName}" in it? Match: "${description}"?
+    // Smart prompt that understands we're looking for ILLUSTRATION, not documentary evidence
+    const prompt = `You are an image validator for a biography article. Evaluate if this image could ILLUSTRATE the following about "${celebrityName}":
 
-Score 0-100:
-- 85-100: Person confirmed, context matches
-- 70-84: Person likely, partial match  
-- 50-69: Uncertain
-- 0-49: Wrong/no match
+TOPIC/SCENE: "${description}"
+
+IMPORTANT CONTEXT:
+- We are looking for images that could ILLUSTRATE a biographical fact
+- Some specific scenes may not have been photographed (private moments, childhood abuse, etc.)
+- In such cases, a thematically related image is acceptable
+
+SCORING GUIDE:
+- 90-100: PERFECT match - person confirmed, exact scene/context as described
+- 75-89: GREAT match - person confirmed, very close context (same era, similar setting)
+- 60-74: GOOD match - person confirmed, thematically related (could illustrate the topic)
+- 45-59: ACCEPTABLE - person confirmed, generic photo that doesn't contradict the topic
+- 30-44: WEAK - person might be there, or context seems unrelated
+- 0-29: REJECT - wrong person, or image contradicts the description
+
+EXAMPLES:
+- Description: "childhood with abusive father" → Photo of person as child = 70-80% (illustrates childhood era)
+- Description: "youth soccer team 1990s" → Adult in suit = 25% (wrong era/context)
+- Description: "bankruptcy announcement" → Person looking stressed at podium = 65% (thematically fits)
+- Description: "early career struggles" → Young person performing = 75% (illustrates early career)
 
 JSON only: {"isRelevant": bool, "confidence": num, "reasoning": "brief"}`;
 
@@ -187,7 +202,8 @@ async function processWithConcurrency<T, R>(
 
 /**
  * Find best image from multiple candidates using Gemini validation
- * Uses limited parallelism (3 concurrent) and early-exit at 85% confidence
+ * Uses limited parallelism (3 concurrent) and early-exit at threshold confidence
+ * Returns detailed result with confidence and reasoning
  */
 export async function findBestImage(
   imageUrls: string[],
@@ -196,7 +212,7 @@ export async function findBestImage(
   onProgress?: (progress: { stage: string; current: number; total: number; confidence?: number }) => void,
   sources?: Array<'google-en' | 'google-ru' | 'brave' | 'perplexity'>,
   confidenceThreshold: number = 85
-): Promise<string | null> {
+): Promise<FindBestImageResult | null> {
   if (imageUrls.length === 0) {
     return null;
   }
@@ -248,7 +264,7 @@ export async function findBestImage(
         confidence: earlyExitResult.validation.confidence
       });
     }
-    return earlyExitResult.url;
+    return { url: earlyExitResult.url, confidence: earlyExitResult.validation.confidence, reasoning: earlyExitResult.validation.reasoning };
   }
 
   // Otherwise find best from all checked
@@ -265,5 +281,11 @@ export async function findBestImage(
 
   console.log(`  🏆 Best match from ${best.source}: ${best.validation.confidence}% - ${best.validation.reasoning}`);
   
-  return best.url;
+  return { url: best.url, confidence: best.validation.confidence, reasoning: best.validation.reasoning };
+}
+
+export interface FindBestImageResult {
+  url: string;
+  confidence: number;
+  reasoning: string;
 }

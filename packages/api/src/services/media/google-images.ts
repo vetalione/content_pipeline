@@ -3,7 +3,7 @@
  * With Brave backup and optimized validation
  */
 
-import { findBestImage } from './gemini-image-validator';
+import { findBestImage, FindBestImageResult } from './gemini-image-validator';
 import { searchBraveImages } from './brave-images';
 import { searchPerplexityImages } from './perplexity-images';
 
@@ -237,6 +237,54 @@ export async function searchGoogleImages(
     console.error('Google Image Search error:', error);
     return [];
   }
+}
+
+/**
+ * Simplify overly specific description to a more general one
+ * Used as fallback when strict search fails
+ */
+function simplifyDescription(description: string, celebrityName: string): string {
+  // Extract the core theme/era from the description
+  const lowered = description.toLowerCase();
+  
+  // Detect era/age
+  let era = '';
+  if (lowered.includes('детств') || lowered.includes('child') || lowered.includes('маленьк') || lowered.includes('юн')) {
+    era = 'childhood/young';
+  } else if (lowered.includes('молод') || lowered.includes('young') || lowered.includes('ранн') || lowered.includes('early')) {
+    era = 'early career';
+  } else if (lowered.includes('1980') || lowered.includes('1990') || lowered.includes('2000')) {
+    const yearMatch = description.match(/(19\d{2}|200\d)/);
+    if (yearMatch) era = yearMatch[0] + 's';
+  }
+  
+  // Detect theme
+  let theme = '';
+  if (lowered.includes('семь') || lowered.includes('family') || lowered.includes('отец') || lowered.includes('мать') || lowered.includes('father') || lowered.includes('mother')) {
+    theme = 'family';
+  } else if (lowered.includes('концерт') || lowered.includes('сцен') || lowered.includes('выступ') || lowered.includes('stage') || lowered.includes('perform')) {
+    theme = 'performing';
+  } else if (lowered.includes('интервью') || lowered.includes('interview') || lowered.includes('пресс')) {
+    theme = 'interview';
+  } else if (lowered.includes('провал') || lowered.includes('банкрот') || lowered.includes('failure') || lowered.includes('bankrupt') || lowered.includes('труд')) {
+    theme = 'difficult times';
+  } else if (lowered.includes('футбол') || lowered.includes('soccer') || lowered.includes('спорт') || lowered.includes('sport')) {
+    theme = 'sports';
+  }
+  
+  // Build simplified description
+  const parts = [celebrityName];
+  if (era) parts.push(era);
+  if (theme) parts.push(theme);
+  
+  // Fallback to just the name + generic context
+  if (parts.length === 1) {
+    parts.push('vintage photo portrait');
+  }
+  
+  const simplified = parts.join(' ');
+  console.log(`  📝 Simplified description: "${description.substring(0, 50)}..." → "${simplified}"`);
+  return simplified;
 }
 
 /**
@@ -481,7 +529,8 @@ export async function findFactImage(
       onProgress({ stage: 'validating', current: 0, total: uniqueCandidates.length });
     }
     
-    const bestImage = await findBestImage(
+    // First pass: strict validation with full description
+    const result = await findBestImage(
       uniqueCandidates.map(c => c.url), 
       celebrityName, 
       description, 
@@ -489,7 +538,46 @@ export async function findFactImage(
       uniqueCandidates.map(c => c.source),
       confidenceThreshold
     );
-    return bestImage;
+    
+    // If we found a good match (above threshold or at least 60%), use it
+    if (result && result.confidence >= Math.min(confidenceThreshold, 60)) {
+      console.log(`  ✅ Found good match: ${result.confidence}%`);
+      return result.url;
+    }
+    
+    // If best result is below 60%, try with simplified description
+    if (result && result.confidence < 60) {
+      console.log(`  ⚠️ Best match only ${result.confidence}%, trying simplified description...`);
+      
+      const simplifiedDesc = simplifyDescription(description, celebrityName);
+      
+      // Re-validate the same candidates with simpler criteria
+      const fallbackResult = await findBestImage(
+        uniqueCandidates.map(c => c.url), 
+        celebrityName, 
+        simplifiedDesc, 
+        onProgress,
+        uniqueCandidates.map(c => c.source),
+        50 // Lower threshold for fallback
+      );
+      
+      if (fallbackResult && fallbackResult.confidence >= 50) {
+        console.log(`  🔄 Fallback found better match: ${fallbackResult.confidence}% with simplified description`);
+        return fallbackResult.url;
+      }
+      
+      // If still nothing good, return the best we had
+      console.log(`  📸 Using best available: ${result.confidence}%`);
+      return result.url;
+    }
+    
+    // No result at all
+    if (!result && uniqueCandidates.length > 0) {
+      console.log(`  ⚠️ No validation results, using first candidate as fallback`);
+      return uniqueCandidates[0].url;
+    }
+    
+    return result?.url || null;
   } catch (error) {
     console.error(`  ❌ Image validation error:`, error);
     // On error, return first candidate as fallback
