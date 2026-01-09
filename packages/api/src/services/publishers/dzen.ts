@@ -586,26 +586,38 @@ async function addTextBlock(page: Page, text: string): Promise<boolean> {
  * Dzen uses H3 for section headers, visible in toolbar as "Heading 3"
  */
 async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<boolean> {
-  console.log(`�� Adding H${level} heading: "${text.substring(0, 40)}..."`);
+  console.log(`📝 Adding H${level} heading: "${text.substring(0, 40)}..."`);
   
   try {
+    // CRITICAL: Scroll editor into view first
+    await focusEditor(page);
+    
     // Press Enter for new block
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
     
-    // Use clipboard paste with typing fallback
+    // Type the heading text
     await insertText(page, text);
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(300);
     
-    // Select all text in this block (Ctrl+A in Draft.js selects current block content)
-    // Use Shift+Home to select from cursor to beginning of line
-    await page.keyboard.press('Home');
-    await page.keyboard.down('Shift');
-    await page.keyboard.press('End');
-    await page.keyboard.up('Shift');
-    await page.waitForTimeout(100);
+    // Select all text in current line using triple click
+    // Triple click is more reliable than keyboard selection
+    const editor = await page.$('[contenteditable="true"]');
+    if (editor) {
+      await editor.click({ clickCount: 3 });
+      await page.waitForTimeout(300);
+    }
     
-    // Click H2 or H3 button in toolbar (from user's HTML: aria-label="Heading 2")
+    // Wait for toolbar to appear (it shows up when text is selected)
+    const toolbarSelector = '[class*="editorToolbar"]';
+    try {
+      await page.waitForSelector(toolbarSelector, { timeout: 2000, state: 'visible' });
+      console.log('   ✓ Toolbar appeared');
+    } catch {
+      console.log('   ⚠️ Toolbar not visible, trying anyway...');
+    }
+    
+    // Click H2 or H3 button in toolbar
     const headingSelector = level === 2 
       ? '[aria-label="Heading 2"]' 
       : '[aria-label="Heading 3"]';
@@ -613,14 +625,15 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
     const headingBtn = await page.$(headingSelector);
     if (headingBtn) {
       await headingBtn.click();
-      await page.waitForTimeout(200);
-      console.log(`✅ Applied H${level} formatting`);
+      await page.waitForTimeout(300);
+      console.log(`   ✅ Applied H${level} formatting`);
     } else {
-      console.log(`⚠️ H${level} button not found, text added as paragraph`);
+      console.log(`   ⚠️ H${level} button not found, text added as paragraph`);
     }
     
-    // Move to end of line
-    await page.keyboard.press('End');
+    // CRITICAL: Remove selection BEFORE pressing Enter (otherwise text gets deleted!)
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(100);
     
     return true;
   } catch (error) {
@@ -637,35 +650,45 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
   console.log(`💬 Adding blockquote: "${text.substring(0, 40)}..."`);
   
   try {
-    // Scroll to editor first
+    // CRITICAL: Scroll editor into view first
     await focusEditor(page);
     
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
     
-    // Use clipboard paste with typing fallback
+    // Type the quote text
     await insertText(page, text);
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(300);
     
-    // Select all text in this line (use Shift+Home/End for current line)
-    await page.keyboard.press('Home');
-    await page.keyboard.down('Shift');
-    await page.keyboard.press('End');
-    await page.keyboard.up('Shift');
-    await page.waitForTimeout(100);
+    // Select all text in current line using triple click
+    const editor = await page.$('[contenteditable="true"]');
+    if (editor) {
+      await editor.click({ clickCount: 3 });
+      await page.waitForTimeout(300);
+    }
     
-    // Click blockquote button in toolbar (from user's HTML: aria-label="Blockquote")
+    // Wait for toolbar to appear
+    const toolbarSelector = '[class*="editorToolbar"]';
+    try {
+      await page.waitForSelector(toolbarSelector, { timeout: 2000, state: 'visible' });
+      console.log('   ✓ Toolbar appeared');
+    } catch {
+      console.log('   ⚠️ Toolbar not visible, trying anyway...');
+    }
+    
+    // Click blockquote button (from user's HTML: aria-label="Blockquote")
     const quoteBtn = await page.$('[aria-label="Blockquote"]');
     if (quoteBtn) {
       await quoteBtn.click();
-      await page.waitForTimeout(200);
-      console.log('✅ Applied blockquote formatting');
+      await page.waitForTimeout(300);
+      console.log('   ✅ Applied blockquote formatting');
     } else {
-      console.log('⚠️ Blockquote button not found');
+      console.log('   ⚠️ Blockquote button not found');
     }
     
-    // Move to end
-    await page.keyboard.press('End');
+    // CRITICAL: Remove selection BEFORE any further action
+    await page.keyboard.press('ArrowRight');
+    await page.waitForTimeout(100);
     
     return true;
   } catch (error) {
@@ -779,7 +802,27 @@ async function addImageFromUrl(page: Page, imageUrl: string): Promise<boolean> {
     
     if (clicked) {
       // Wait for image popup to appear
-      await page.waitForTimeout(500);
+      await page.waitForTimeout(800);
+      
+      // The popup may have tabs - try to click "По ссылке" (By URL) tab first
+      const urlTabSelectors = [
+        'button:has-text("По ссылке")',
+        'span:has-text("По ссылке")',
+        '[class*="tab"]:has-text("ссылк")',
+        'div:has-text("По ссылке")'
+      ];
+      
+      for (const tabSelector of urlTabSelectors) {
+        try {
+          const urlTab = await page.$(tabSelector);
+          if (urlTab) {
+            console.log(`   ✓ Found URL tab: ${tabSelector}`);
+            await urlTab.click();
+            await page.waitForTimeout(500);
+            break;
+          }
+        } catch {}
+      }
       
       // From user's HTML: <div class="article-editor-desktop--image-popup__urlInput-25">
       // <input type="text" placeholder="Ссылка" value="">
@@ -790,7 +833,8 @@ async function addImageFromUrl(page: Page, imageUrl: string): Promise<boolean> {
         // Fallbacks
         '[class*="image-popup"] input',
         '[class*="urlInput"] input',
-        'input[placeholder*="ссылк"]'
+        'input[placeholder*="ссылк"]',
+        'input[type="text"]'  // Last resort - any text input in popup
       ];
       
       for (const selector of urlInputSelectors) {
@@ -838,41 +882,11 @@ async function uploadCover(page: Page, coverImage: CoverImage | string): Promise
     ? coverImage 
     : (coverImage.processedImageUrl || coverImage.originalImageUrl);
   
-  console.log(`🎨 Uploading cover: ${imageUrl.substring(0, 60)}...`);
+  console.log(`🎨 Uploading cover image using same method as regular images...`);
   
-  try {
-    // Look for cover upload button
-    const coverSelectors = [
-      '[data-testid="cover-upload"]',
-      'button:has-text("Обложка")',
-      'button:has-text("Cover")',
-      '[class*="Cover"] button',
-      '.cover-upload'
-    ];
-    
-    for (const selector of coverSelectors) {
-      const coverBtn = await page.$(selector);
-      if (coverBtn) {
-        await coverBtn.click();
-        await page.waitForTimeout(500);
-        
-        // Look for URL input
-        const urlInput = await page.$('input[placeholder*="URL"], input[type="url"]');
-        if (urlInput) {
-          await urlInput.fill(imageUrl);
-          await page.keyboard.press('Enter');
-          await page.waitForTimeout(2000);
-          return true;
-        }
-      }
-    }
-    
-    console.log('⚠️ Cover upload button not found, skipping');
-    return false;
-  } catch (error) {
-    console.error('❌ Error uploading cover:', error);
-    return false;
-  }
+  // In Dzen editor, cover is added the same way as regular images
+  // Just add it as the first image right after the title
+  return await addImageFromUrl(page, imageUrl);
 }
 
 /**
