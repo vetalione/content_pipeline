@@ -83,6 +83,22 @@ async function loadContext(browser: Browser): Promise<BrowserContext> {
   
   if (fs.existsSync(DZEN_STATE_FILE)) {
     console.log('📂 Loading saved Dzen session...');
+    
+    // Log session info for debugging
+    try {
+      const sessionData = JSON.parse(fs.readFileSync(DZEN_STATE_FILE, 'utf-8'));
+      const cookieCount = sessionData.cookies?.length || 0;
+      const authCookies = (sessionData.cookies || []).filter((c: any) => 
+        ['yandex_login', 'Session_id', 'dzen_sess_id', 'zen_session_id'].includes(c.name)
+      );
+      console.log(`   📊 Session has ${cookieCount} cookies, ${authCookies.length} auth cookies`);
+      if (authCookies.length > 0) {
+        console.log(`   🔑 Auth cookies: ${authCookies.map((c: any) => c.name).join(', ')}`);
+      }
+    } catch (e) {
+      console.log('   ⚠️ Could not parse session file for debugging');
+    }
+    
     return await browser.newContext({ 
       storageState: DZEN_STATE_FILE,
       viewport: { width: 1280, height: 900 }
@@ -109,20 +125,48 @@ async function saveContext(context: BrowserContext) {
  */
 async function isLoggedIn(page: Page): Promise<boolean> {
   try {
-    // Look for user menu or profile elements
-    const userMenu = await page.$('[data-testid="user-menu"], .user-menu, .user-pic, [class*="UserPic"]');
-    if (userMenu) return true;
+    // First check: do we have auth cookies?
+    const cookies = await page.context().cookies();
+    const authCookies = cookies.filter(c => 
+      c.name === 'yandex_login' || 
+      c.name === 'Session_id' || 
+      c.name === 'dzen_sess_id' ||
+      c.name === 'zen_session_id'
+    );
+    console.log(`🍪 Found ${authCookies.length} auth cookies: ${authCookies.map(c => c.name).join(', ')}`);
     
-    // Alternative: check for "Write" or "Create" button
-    const createButton = await page.$('a[href*="/editor"], button:has-text("Написать"), button:has-text("Создать")');
-    if (createButton) return true;
+    // If we have yandex_login cookie, we're likely logged in
+    const hasYandexLogin = cookies.some(c => c.name === 'yandex_login' && c.value);
+    if (hasYandexLogin) {
+      console.log('✅ Found yandex_login cookie - session is valid');
+      return true;
+    }
     
-    // Check URL for zen studio
+    // Visual check: Look for user menu or profile elements
+    const userMenu = await page.$('[data-testid="user-menu"], .user-menu, .user-pic, [class*="UserPic"], [class*="avatar"], .Avatar');
+    if (userMenu) {
+      console.log('✅ Found user menu element');
+      return true;
+    }
+    
+    // Alternative: check for "Write" or "Create" button (only visible when logged in)
+    const createButton = await page.$('a[href*="/editor"], a[href*="/profile"], button:has-text("Написать"), button:has-text("Создать")');
+    if (createButton) {
+      console.log('✅ Found create/profile button');
+      return true;
+    }
+    
+    // Check URL for zen studio or profile
     const url = page.url();
-    if (url.includes('dzen.ru/profile') || url.includes('dzen.ru/id')) return true;
+    if (url.includes('dzen.ru/profile') || url.includes('dzen.ru/id') || url.includes('/a/')) {
+      console.log('✅ URL indicates logged in state');
+      return true;
+    }
     
+    console.log('❌ No login indicators found');
     return false;
-  } catch {
+  } catch (error) {
+    console.error('Error checking login status:', error);
     return false;
   }
 }
