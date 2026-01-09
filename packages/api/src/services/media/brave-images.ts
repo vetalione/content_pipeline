@@ -1,6 +1,11 @@
 /**
  * Brave Search API - backup source for finding images
  * https://brave.com/search/api/
+ * 
+ * SEARCH STRATEGY:
+ * - Brave works best with short keyword queries (2-5 words)
+ * - Format: "Name context year photo"
+ * - Supports language filtering via search_lang parameter
  */
 
 interface BraveImageResult {
@@ -26,13 +31,15 @@ interface BraveSearchResponse {
 
 /**
  * Search for images using Brave Search API
- * @param query Search query
+ * @param query Search query (short keywords work best)
  * @param numResults Number of results to return
+ * @param lang Search language: 'en' or 'ru'
  * @returns Array of direct image URLs
  */
 export async function searchBraveImages(
   query: string,
-  numResults: number = 10
+  numResults: number = 10,
+  lang: 'en' | 'ru' = 'en'
 ): Promise<string[]> {
   const apiKey = process.env.BRAVE_SEARCH_API_KEY;
 
@@ -46,9 +53,9 @@ export async function searchBraveImages(
     url.searchParams.set('q', query);
     url.searchParams.set('count', String(Math.min(numResults, 20)));
     url.searchParams.set('safesearch', 'off');
-    url.searchParams.set('search_lang', 'en');
+    url.searchParams.set('search_lang', lang);
 
-    console.log(`🦁 Brave Image Search: "${query}"`);
+    console.log(`🦁 Brave [${lang.toUpperCase()}]: "${query}"`);
 
     const response = await fetch(url.toString(), {
       headers: {

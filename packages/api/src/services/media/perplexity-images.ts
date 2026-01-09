@@ -1,6 +1,12 @@
 /**
  * Perplexity Sonar Pro API for finding images
  * Uses AI-powered search for better contextual matches
+ * 
+ * SEARCH STRATEGY:
+ * - Perplexity is AI-based, so we can give detailed context
+ * - Works best with natural language descriptions
+ * - Can understand temporal context (years, eras)
+ * - Excellent for finding rare/obscure images
  */
 
 interface PerplexityImageResult {
@@ -11,13 +17,17 @@ interface PerplexityImageResult {
 
 /**
  * Search for images using Perplexity Sonar Pro API
- * @param query Search query describing what image to find
+ * @param query Full descriptive query (visual suggestion + context)
  * @param numResults Number of results to return
+ * @param celebrityName Name of the celebrity (for better context)
+ * @param year Target year for the photo
  * @returns Array of direct image URLs
  */
 export async function searchPerplexityImages(
   query: string,
-  numResults: number = 5
+  numResults: number = 5,
+  celebrityName?: string,
+  year?: number
 ): Promise<string[]> {
   const apiKey = process.env.PERPLEXITY_API_KEY;
 
@@ -27,7 +37,50 @@ export async function searchPerplexityImages(
   }
 
   try {
-    console.log(`�� Perplexity Image Search: "${query}"`);
+    // Build context-rich query for AI
+    let searchContext = query;
+    if (celebrityName && !query.toLowerCase().includes(celebrityName.toLowerCase())) {
+      searchContext = `${celebrityName}: ${query}`;
+    }
+    if (year && !query.includes(String(year))) {
+      searchContext += ` (circa ${year})`;
+    }
+    
+    console.log(`🔮 Perplexity AI Search: "${searchContext.substring(0, 80)}..."`);
+
+    const systemPrompt = `You are an expert photo researcher specializing in finding rare historical photographs.
+
+YOUR TASK: Find authentic photographs matching the user's description.
+
+REQUIREMENTS:
+1. ONE PHOTO per image - NO collages, grids, or montages (multiple people in one photo is OK)
+2. Time-period accurate - if a year is mentioned, find photos FROM that era
+3. High quality - clear, well-lit photos preferred
+4. Documentary style - real photos, not promotional shots
+
+PRIORITY SOURCES (in order):
+1. Wikimedia Commons / Wikipedia
+2. Archive.org
+3. Official biographies
+4. News agency archives (AP, Reuters, AFP)
+5. Museum digital collections
+
+AVOID:
+- Stock photo sites (Getty, Shutterstock, Alamy, iStock)
+- Pinterest, Instagram
+- Collages or "through the years" compilations
+- Modern recreations or colorizations (unless specified)
+- Low resolution thumbnails
+
+OUTPUT FORMAT:
+Return ONLY direct image URLs (ending in .jpg, .jpeg, .png).
+One URL per line. No explanations or descriptions.`;
+
+    const userPrompt = `Find ${numResults} authentic photographs matching this description:
+
+"${searchContext}"
+
+Return only direct image URLs, one per line.`;
 
     const response = await fetch('https://api.perplexity.ai/chat/completions', {
       method: 'POST',
@@ -38,14 +91,8 @@ export async function searchPerplexityImages(
       body: JSON.stringify({
         model: 'sonar-pro',
         messages: [
-          {
-            role: 'system',
-            content: 'You are an image search assistant. Find the most relevant historical photos. Return ONLY valid direct image URLs (ending in .jpg, .jpeg, .png). Prioritize Wikipedia, Wikimedia Commons, and archive.org sources.'
-          },
-          {
-            role: 'user',
-            content: `Find ${numResults} high-quality photos for: "${query}". Return ONLY the direct image URLs, one per line. No explanations.`
-          }
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt }
         ],
         temperature: 0.1,
         max_tokens: 1000,
@@ -59,7 +106,9 @@ export async function searchPerplexityImages(
           '-shutterstock.com',
           '-pinterest.com',
           '-istockphoto.com',
-          '-alamy.com'
+          '-alamy.com',
+          '-dreamstime.com',
+          '-depositphotos.com'
         ]
       })
     });
@@ -108,7 +157,7 @@ export async function searchPerplexityImages(
     // Limit to requested count
     const result = images.slice(0, numResults);
     
-    console.log(`✅ Perplexity found ${result.length} images for: "${query}"`);
+    console.log(`✅ Perplexity found ${result.length} images`);
     return result;
 
   } catch (error) {
@@ -118,7 +167,7 @@ export async function searchPerplexityImages(
 }
 
 /**
- * Check if URL is a valid direct image URL (not stock photo)
+ * Check if URL is a valid direct image URL (not stock photo or collage)
  */
 function isValidImageUrl(url: string): boolean {
   const lower = url.toLowerCase();
@@ -144,5 +193,17 @@ function isValidImageUrl(url: string): boolean {
     lower.includes('depositphotos') ||
     lower.includes('pinterest');
   
-  return !isStockPhoto;
+  if (isStockPhoto) return false;
+  
+  // Exclude likely collages by URL patterns
+  const isLikelyCollage =
+    lower.includes('collage') ||
+    lower.includes('grid') ||
+    lower.includes('through-the-years') ||
+    lower.includes('evolution') ||
+    lower.includes('timeline') ||
+    lower.includes('then-and-now') ||
+    lower.includes('before-after');
+  
+  return !isLikelyCollage;
 }

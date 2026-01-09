@@ -1,6 +1,54 @@
 /**
- * Google Custom Search API for finding images
- * With Brave backup and optimized validation
+ * Image Search Orchestrator
+ * Combines Google, Brave, and Perplexity for comprehensive image search
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * SEARCH STRATEGY BY SOURCE:
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * 📍 GOOGLE CUSTOM SEARCH (EN + RU)
+ * ─────────────────────────────────
+ * Best for: Large coverage, stock-free results via CSE filters
+ * Query format: SHORT KEYWORDS only, no sentences!
+ * 
+ * EN: "Name context_keyword year photo"
+ *     Example: "Steve Jobs garage 1976 photo"
+ * 
+ * RU: "Имя контекст год [архивное/редкое] фото"
+ *     Example: "Стив Джобс гараж 1976 архивное фото"
+ *     - Uses "архивное фото" for pre-1970
+ *     - Uses "редкое фото" for 1970-2000
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * 🦁 BRAVE SEARCH (EN + RU)
+ * ─────────────────────────
+ * Best for: Alternative index, fresh results, Russian archives
+ * Query format: Same as Google - short keywords
+ * 
+ * - Supports language filtering via search_lang parameter
+ * - EN search: Same query as Google EN
+ * - RU search: Same query as Google RU (for Russian celebrities)
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════════
+ * 
+ * 🔮 PERPLEXITY SONAR PRO (AI-powered)
+ * ────────────────────────────────────
+ * Best for: Contextual understanding, rare photos, smart filtering
+ * Query format: NATURAL LANGUAGE with full context
+ * 
+ * - Understands temporal context ("childhood in the 1960s")
+ * - Can interpret visual descriptions
+ * - Filters collages and stock photos via system prompt
+ * - Prioritizes Wikipedia, Wikimedia Commons, Archive.org
+ * 
+ * System prompt instructs to:
+ * - Find SINGLE PERSON photos only
+ * - Match time period accurately
+ * - Avoid collages and montages
+ * - Prefer documentary-style photos
+ * 
+ * ═══════════════════════════════════════════════════════════════════════════════
  */
 
 import { findBestImage, FindBestImageResult } from './gemini-image-validator';
@@ -359,6 +407,45 @@ function extractKeywords(visualSuggestion: string, celebrityName: string): strin
 }
 
 /**
+ * Extract key Russian search terms from visual suggestion
+ * For Google RU - keeps terms in Russian for better local search
+ */
+function extractKeywordsRussian(visualSuggestion: string, celebrityName: string): string {
+  let cleaned = visualSuggestion
+    .replace(new RegExp(celebrityName, 'gi'), '')
+    .replace(/редкое фото/gi, '')
+    .replace(/фото/gi, '')
+    .replace(/[«»""]/g, '')
+    .trim();
+  
+  const keywords: string[] = [];
+  const cleanedLower = cleaned.toLowerCase();
+  
+  // Priority Russian keywords for search
+  const ruKeywords: string[] = [
+    // Life stages
+    'детство', 'юность', 'молодость', 'школьные годы',
+    // Events
+    'свадьба', 'премьера', 'награждение', 'интервью',
+    // Contexts
+    'на сцене', 'за работой', 'с семьей', 'дома',
+    // Negative events
+    'банкротство', 'арест', 'суд', 'провал',
+    // Style
+    'портрет', 'архив'
+  ];
+  
+  for (const kw of ruKeywords) {
+    if (cleanedLower.includes(kw.split(' ')[0])) {
+      keywords.push(kw);
+      if (keywords.length >= 2) break;
+    }
+  }
+  
+  return keywords.join(' ');
+}
+
+/**
  * Check if celebrity name is already in English (Latin characters)
  */
 function isEnglishName(name: string): boolean {
@@ -434,41 +521,61 @@ export async function findFactImage(
   
   // Extract keywords from visual suggestion
   let keywords = '';
+  let keywordsRu = '';
   if (visualSuggestion) {
     keywords = extractKeywords(visualSuggestion, celebrityName);
+    keywordsRu = extractKeywordsRussian(visualSuggestion, celebrityName);
   }
   
-  // ===== PRIMARY QUERY (English - wider coverage) =====
-  const enQueryParts = [englishName, 'photo'];
+  // ===== PRIMARY QUERY (English - wider global coverage) =====
+  // Google EN: short, keyword-focused query for maximum recall
+  // Format: "Name [context_keyword] [year] photo" - NO sentences!
+  const enQueryParts = [englishName];
   
+  // Add contextual keyword (1-2 words max for Google)
   if (keywords) {
     enQueryParts.push(keywords);
   }
   
+  // Year is crucial for historical accuracy
   if (factYear) {
     enQueryParts.push(String(factYear));
   }
+  
+  // "photo" at the end helps filter results
+  enQueryParts.push('photo');
 
   const enQuery = enQueryParts.join(' ');
-  console.log(`  🔎 English query: "${enQuery}"`);
+  console.log(`  🔎 Google EN: "${enQuery}"`);
   
-  // ===== SECONDARY QUERY (Russian - for Russian celebrities) =====
+  // ===== SECONDARY QUERY (Russian - archives, rare photos) =====
+  // Google RU: target Russian archives, historical sources
+  // Format: "Имя [контекст] [год] фото [архив/редкое]" 
   let ruQuery = '';
   if (!nameIsEnglish) {
-    const ruQueryParts = [celebrityName, 'фото'];
+    const ruQueryParts = [celebrityName];
     
-    // For Russian query, use simpler keywords
+    // Add Russian context keywords
+    if (keywordsRu) {
+      ruQueryParts.push(keywordsRu);
+    }
+    
+    // Year for historical accuracy
     if (factYear) {
       ruQueryParts.push(String(factYear));
     }
     
-    // Add year decade context
-    if (factYear && factYear < 2000) {
-      ruQueryParts.push('архив');
+    // Era-specific search modifiers
+    if (factYear && factYear < 1970) {
+      ruQueryParts.push('архивное фото');
+    } else if (factYear && factYear < 2000) {
+      ruQueryParts.push('редкое фото');
+    } else {
+      ruQueryParts.push('фото');
     }
     
     ruQuery = ruQueryParts.join(' ');
-    console.log(`  🔎 Russian query: "${ruQuery}"`);
+    console.log(`  🔎 Google RU: "${ruQuery}"`);
   }
   
   // ===== SEARCH PHASE: Parallel Google + Brave =====
@@ -501,12 +608,21 @@ export async function findFactImage(
   }
   
   if (useBrave) {
-    searches.push(searchBraveImages(enQuery, resultsPerSource));
+    // Brave EN: same query format as Google EN
+    searches.push(searchBraveImages(enQuery, resultsPerSource, 'en'));
     sources.push('brave');
+    
+    // Brave RU: for Russian celebrities, also search in Russian
+    if (ruQuery) {
+      searches.push(searchBraveImages(ruQuery, Math.max(3, Math.floor(resultsPerSource * 0.6)), 'ru'));
+      sources.push('brave' as any); // Will show as 'brave' in logs
+    }
   }
   
   if (usePerplexity) {
-    searches.push(searchPerplexityImages(searchDescription, resultsPerSource));
+    // Perplexity: AI-based search with full context
+    // Pass celebrity name and year for better targeting
+    searches.push(searchPerplexityImages(searchDescription, resultsPerSource, celebrityName, factYear));
     sources.push('perplexity');
   }
   
