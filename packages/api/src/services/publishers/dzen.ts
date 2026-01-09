@@ -475,9 +475,12 @@ export async function publishToDzen(
     };
   }
   
+  // Use headless mode on server (no X display), headed mode locally for debugging
+  const isServer = !process.env.DISPLAY && process.env.NODE_ENV === 'production';
+  
   const browser = await chromium.launch({ 
-    headless: false,  // Set to true for production
-    slowMo: 100  // Slow down for visibility
+    headless: true,  // Always headless for automation
+    slowMo: isServer ? 50 : 100  // Faster on server
   });
   
   try {
@@ -590,16 +593,26 @@ export async function publishToDzen(
 
 /**
  * Interactive auth setup - opens browser for manual login
+ * NOTE: This requires a display (X server) - run locally, not on server!
  */
 export async function setupDzenAuth(): Promise<void> {
   console.log(`\n${'='.repeat(60)}`);
   console.log('🔐 Dzen Authentication Setup');
   console.log(`${'='.repeat(60)}\n`);
   
+  // Check if we have a display
+  if (!process.env.DISPLAY && process.platform === 'linux') {
+    throw new Error(
+      'setupDzenAuth requires a display (X server). ' +
+      'Run this locally on your machine, then copy the session file to the server. ' +
+      'Session file: packages/api/src/services/publishers/sessions/dzen-state.json'
+    );
+  }
+  
   ensureSessionsDir();
   
   const browser = await chromium.launch({ 
-    headless: false,
+    headless: false,  // Must be headed for manual login
     slowMo: 50
   });
   

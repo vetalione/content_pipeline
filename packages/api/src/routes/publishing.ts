@@ -115,6 +115,7 @@ publishingRouter.get('/:articleId/publications', async (req, res, next) => {
 });
 
 // Setup Dzen authentication (opens browser for manual login)
+// NOTE: Only works locally with display, not on server!
 publishingRouter.post('/auth/dzen/setup', async (req, res, next) => {
   try {
     // This will open a browser window for manual login
@@ -123,6 +124,46 @@ publishingRouter.post('/auth/dzen/setup', async (req, res, next) => {
     res.json({ 
       success: true, 
       message: 'Dzen authentication saved successfully' 
+    });
+  } catch (error: any) {
+    res.status(400).json({
+      success: false,
+      error: error.message,
+      hint: 'Run setupDzenAuth locally and upload session via POST /auth/dzen/session'
+    });
+  }
+});
+
+// Upload Dzen session (for server deployment)
+// Use this to upload session created locally
+publishingRouter.post('/auth/dzen/session', async (req, res, next) => {
+  try {
+    const { sessionData } = req.body;
+    
+    if (!sessionData) {
+      return res.status(400).json({
+        success: false,
+        error: 'sessionData is required (JSON object from dzen-state.json)'
+      });
+    }
+    
+    const fs = await import('fs');
+    const path = await import('path');
+    const sessionsDir = path.resolve(__dirname, '../services/publishers/sessions');
+    const sessionPath = path.join(sessionsDir, 'dzen-state.json');
+    
+    // Ensure directory exists
+    if (!fs.existsSync(sessionsDir)) {
+      fs.mkdirSync(sessionsDir, { recursive: true });
+    }
+    
+    // Write session data
+    fs.writeFileSync(sessionPath, JSON.stringify(sessionData, null, 2));
+    
+    res.json({
+      success: true,
+      message: 'Dzen session uploaded successfully',
+      path: sessionPath
     });
   } catch (error) {
     next(error);
