@@ -34,16 +34,20 @@ export default function Settings() {
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   useEffect(() => {
+    console.log('Settings page mounted, checking auth status...');
     checkAuthStatus();
   }, []);
 
   const checkAuthStatus = async () => {
+    console.log('Checking auth status for API:', API_URL);
     try {
       const response = await fetch(`${API_URL}/api/publishing/auth/dzen/status`, {
         signal: AbortSignal.timeout(5000) // 5 second timeout
       });
+      console.log('Auth status response:', response.status);
       if (!response.ok) throw new Error('API error');
       const data = await response.json();
+      console.log('Auth status data:', data);
       
       setPlatforms(prev => prev.map(p => 
         p.platform === 'dzen' 
@@ -52,7 +56,9 @@ export default function Settings() {
       ));
     } catch (error) {
       console.error('Failed to check auth status:', error);
+      // Still show the page even if API fails
     } finally {
+      console.log('Setting loading to false');
       setLoading(false);
     }
   };

@@ -119,18 +119,27 @@ export default function PublishingView({ articleId, publications }: Props) {
           <h3 className="text-lg font-semibold mb-4">История публикаций</h3>
           <div className="space-y-3">
             {publications.map((pub) => (
-              <div key={pub.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                <div className="flex items-center gap-3">
+              <div key={pub.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-lg overflow-hidden">
+                <div className="flex items-center gap-3 min-w-0 flex-1">
                   {getStatusIcon(pub.status)}
-                  <div>
+                  <div className="min-w-0 flex-1">
                     <div className="font-medium">
                       {platformLabels[pub.platform as Platform]}
                     </div>
-                    <div className="text-sm text-gray-600">
+                    <div className="text-sm text-gray-600 break-words overflow-hidden" style={{ wordBreak: 'break-word' }}>
                       {pub.status === 'published' && pub.publishedAt
                         ? new Date(pub.publishedAt).toLocaleString('ru-RU')
-                        : pub.error || 'В процессе...'}
+                        : pub.error 
+                          ? (pub.error.length > 100 ? pub.error.substring(0, 100) + '...' : pub.error)
+                          : 'В процессе...'}
                     </div>
+                    {/* Show full error in tooltip if truncated */}
+                    {pub.error && pub.error.length > 100 && (
+                      <details className="mt-1">
+                        <summary className="text-xs text-blue-600 cursor-pointer hover:underline">Показать полную ошибку</summary>
+                        <pre className="mt-2 text-xs bg-red-50 p-2 rounded overflow-x-auto whitespace-pre-wrap break-all max-h-32 overflow-y-auto">{pub.error}</pre>
+                      </details>
+                    )}
                   </div>
                 </div>
                 {pub.publishedUrl && (
@@ -138,7 +147,7 @@ export default function PublishingView({ articleId, publications }: Props) {
                     href={pub.publishedUrl}
                     target="_blank"
                     rel="noopener noreferrer"
-                    className="text-primary hover:underline text-sm"
+                    className="text-primary hover:underline text-sm flex-shrink-0 ml-2"
                   >
                     Открыть →
                   </a>
