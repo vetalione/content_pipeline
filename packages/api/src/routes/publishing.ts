@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import { publishToTelegram } from '../services/publishers/telegram';
 import { publishToVK } from '../services/publishers/vk';
+import { publishToDzen, setupDzenAuth } from '../services/publishers/dzen';
 import publishWithPlaywright from '../services/publishers/playwright';
 import { Platform } from '@content-pipeline/shared';
 import { prisma } from '../lib/db';
@@ -51,7 +52,11 @@ publishingRouter.post('/:articleId/publish', async (req, res, next) => {
               result = await publishToVK(article);
               break;
             case Platform.DZEN:
-              result = await publishWithPlaywright(Platform.DZEN, article);
+              const dzenResult = await publishToDzen(article as any);
+              result = { url: dzenResult.url || '' };
+              if (!dzenResult.success) {
+                throw new Error(dzenResult.error || 'Dzen publish failed');
+              }
               break;
             case Platform.INSTAGRAM:
             case Platform.YOUTUBE:
@@ -107,4 +112,37 @@ publishingRouter.get('/:articleId/publications', async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// Setup Dzen authentication (opens browser for manual login)
+publishingRouter.post('/auth/dzen/setup', async (req, res, next) => {
+  try {
+    // This will open a browser window for manual login
+    // Should only be called from local environment
+    await setupDzenAuth();
+    res.json({ 
+      success: true, 
+      message: 'Dzen authentication saved successfully' 
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Check Dzen auth status
+publishingRouter.get('/auth/dzen/status', async (req, res) => {
+  const fs = await import('fs');
+  const path = await import('path');
+  const sessionPath = path.resolve(__dirname, '../services/publishers/sessions/dzen-state.json');
+  
+  const hasSession = fs.existsSync(sessionPath);
+  
+  res.json({
+    success: true,
+    data: {
+      platform: 'dzen',
+      authenticated: hasSession,
+      sessionPath: hasSession ? sessionPath : null
+    }
+  });
 });
