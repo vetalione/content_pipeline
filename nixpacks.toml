@@ -6,6 +6,7 @@ cmds = ["npm install --ignore-scripts --legacy-peer-deps", "npx playwright insta
 
 [phases.build]
 cmds = [
+  "npx prisma generate --schema=packages/api/prisma/schema.prisma",
   "npm run build --workspace=packages/shared",
   "npm run build --workspace=packages/api", 
   "npm run build --workspace=packages/web"
