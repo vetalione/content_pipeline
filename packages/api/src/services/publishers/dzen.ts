@@ -76,15 +76,43 @@ function ensureSessionsDir() {
 }
 
 /**
- * Helper: Write text to clipboard and paste in page context
- * Uses page.evaluate to run navigator.clipboard in browser context
+ * Type text directly using keyboard
+ * Clipboard API doesn't work in headless mode, so we use keyboard.type()
  */
-async function clipboardPaste(page: Page, text: string): Promise<void> {
-  // Use evaluate to write to clipboard in browser context
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore - navigator exists in browser context
-  await page.evaluate((t) => window.navigator.clipboard.writeText(t), text);
-  await page.keyboard.press('Control+v');
+async function typeText(page: Page, text: string): Promise<void> {
+  // Use keyboard.type with small delay for reliability
+  // This works in headless mode unlike clipboard API
+  await page.keyboard.type(text, { delay: 3 });
+}
+
+/**
+ * Close any modal dialogs that might block interaction
+ */
+async function closeModals(page: Page): Promise<void> {
+  try {
+    // Try pressing Escape to close any modal
+    await page.keyboard.press('Escape');
+    await page.waitForTimeout(300);
+    
+    // Try clicking outside modal overlay
+    const overlays = [
+      '.ReactModal__Overlay',
+      '[class*="help-popup"]',
+      '[class*="overlay"]'
+    ];
+    
+    for (const selector of overlays) {
+      const overlay = await page.$(selector);
+      if (overlay) {
+        // Try to find close button within overlay
+        const closeBtn = await overlay.$('button[aria-label="Close"], button[aria-label="Закрыть"], .close-button');
+        if (closeBtn) {
+          await closeBtn.click();
+          await page.waitForTimeout(200);
+        }
+      }
+    }
+  } catch {}
 }
 /**
  * Load saved browser context with cookies
@@ -377,17 +405,16 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
   console.log(`📰 Setting title: "${title.substring(0, 50)}..."`);
   
   try {
-    // Dzen uses Draft.js - title is in the first editor with h1
-    // Selector: .article-editor-desktop--editable-input__editableInput-oN h1
+    // Close any modals first
+    await closeModals(page);
+    
+    // Dzen uses Draft.js - title is in the first editor block
     const titleSelectors = [
+      '.public-DraftEditor-content .public-DraftStyleDefault-block:first-child',
+      '.public-DraftEditor-content [data-offset-key]:first-child',
       '.article-editor-desktop--editable-input__editableInput-oN .public-DraftEditor-content',
-      'h1.zen-editor-block .public-DraftStyleDefault-block',
-      '[data-testid="title-input"]',
-      'h1[contenteditable="true"]',
-      '.article-title[contenteditable="true"]',
-      '[class*="titleInput"] .public-DraftEditor-content',
-      '[placeholder*="Заголовок"]',
-      '[placeholder*="Title"]'
+      '[class*="editableInput"] .public-DraftEditor-content',
+      '.public-DraftEditor-content'
     ];
     
     for (const selector of titleSelectors) {
@@ -396,28 +423,25 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
         await titleInput.click();
         await page.waitForTimeout(300);
         
-        // Draft.js doesn't support .fill() - use keyboard
-        // First select all existing text, then paste new
+        // Select all existing text and replace with new title
         await page.keyboard.press('Control+a');
         await page.waitForTimeout(100);
         
-        // Use clipboard paste for speed
-        await clipboardPaste(page, title);
-
+        // Use keyboard.type() - clipboard doesn't work in headless
+        await typeText(page, title);
         
         console.log('✅ Title set');
         return true;
       }
     }
     
-    // Fallback: try first contenteditable (title input)
-    const firstEditable = await page.$('.article-editor-desktop--editable-input__editableInput-oN [contenteditable="true"]');
-    if (firstEditable) {
-      await firstEditable.click();
+    // Fallback: click on editor area and type
+    const editor = await page.$('[contenteditable="true"]');
+    if (editor) {
+      await editor.click();
       await page.waitForTimeout(300);
       await page.keyboard.press('Control+a');
-      await clipboardPaste(page, title);
-
+      await typeText(page, title);
       console.log('✅ Title set via fallback');
       return true;
     }
@@ -440,22 +464,14 @@ async function addTextBlock(page: Page, text: string): Promise<boolean> {
     await page.keyboard.press('Enter');
     await page.waitForTimeout(200);
     
-    // Use clipboard paste instead of typing - much faster!
-    await clipboardPaste(page, text);
-
-    await page.waitForTimeout(300);
+    // Use keyboard.type() - clipboard doesn't work in headless
+    await typeText(page, text);
+    await page.waitForTimeout(100);
     
     return true;
   } catch (error) {
-    // Fallback to typing if clipboard fails
-    console.log('⚠️ Clipboard failed, falling back to typing');
-    try {
-      await page.keyboard.type(text, { delay: 5 });
-      return true;
-    } catch (e) {
-      console.error('❌ Error adding text block:', e);
-      return false;
-    }
+    console.error('❌ Error adding text block:', error);
+    return false;
   }
 }
 
@@ -463,25 +479,27 @@ async function addTextBlock(page: Page, text: string): Promise<boolean> {
  * Add heading block (H2/H3)
  * Dzen uses H3 for section headers, visible in toolbar as "Heading 3"
  */
-async function addHeading(page: Page, text: string, level: 2 | 3 = 3): Promise<boolean> {
-  console.log(`📌 Adding H${level} heading: "${text.substring(0, 40)}..."`);
+async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<boolean> {
+  console.log(`�� Adding H${level} heading: "${text.substring(0, 40)}..."`);
   
   try {
     // Press Enter for new block
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
     
-    // Paste the text (faster than typing)
-    await clipboardPaste(page, text);
-
-    await page.waitForTimeout(300);
+    // Use keyboard.type() - clipboard doesn't work in headless
+    await typeText(page, text);
+    await page.waitForTimeout(200);
     
-    // Select all text in this block
-    await page.keyboard.press('Control+a');
+    // Select all text in this block (Ctrl+A in Draft.js selects current block content)
+    // Use Shift+Home to select from cursor to beginning of line
+    await page.keyboard.press('Home');
+    await page.keyboard.down('Shift');
+    await page.keyboard.press('End');
+    await page.keyboard.up('Shift');
     await page.waitForTimeout(100);
     
-    // Click H2 or H3 button in toolbar
-    // Toolbar button selectors from HTML: aria-label="Heading 2" or "Heading 3"
+    // Click H2 or H3 button in toolbar (from user's HTML: aria-label="Heading 2")
     const headingSelector = level === 2 
       ? '[aria-label="Heading 2"]' 
       : '[aria-label="Heading 3"]';
@@ -497,7 +515,6 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 3): Promise<b
     
     // Move to end of line
     await page.keyboard.press('End');
-    await page.keyboard.press('Enter');
     
     return true;
   } catch (error) {
@@ -517,21 +534,18 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
     
-    // Paste the text
-    await clipboardPaste(page, text);
-
-    await page.waitForTimeout(300);
+    // Use keyboard.type() - clipboard doesn't work in headless
+    await typeText(page, text);
+    await page.waitForTimeout(200);
     
-    // Select all text in this block
-    await page.keyboard.press('Control+a');
+    // Select all text in this line (use Shift+Home/End for current line)
+    await page.keyboard.press('Home');
+    await page.keyboard.down('Shift');
+    await page.keyboard.press('End');
+    await page.keyboard.up('Shift');
     await page.waitForTimeout(100);
     
-    // First, clear any formatting (user said this is needed before applying blockquote)
-    // Try Ctrl+\ or find "clear formatting" button
-    await page.keyboard.press('Control+\\');
-    await page.waitForTimeout(100);
-    
-    // Click blockquote button in toolbar (aria-label="Blockquote")
+    // Click blockquote button in toolbar (from user's HTML: aria-label="Blockquote")
     const quoteBtn = await page.$('[aria-label="Blockquote"]');
     if (quoteBtn) {
       await quoteBtn.click();
@@ -543,7 +557,6 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
     
     // Move to end
     await page.keyboard.press('End');
-    await page.keyboard.press('Enter');
     
     return true;
   } catch (error) {
@@ -598,95 +611,121 @@ async function validateImage(imageUrl: string): Promise<{valid: boolean, reason?
 async function addImageFromUrl(page: Page, imageUrl: string): Promise<boolean> {
   console.log(`🖼️ Adding image: ${imageUrl.substring(0, 60)}...`);
   
+  // Skip base64 images - they're too large and not supported for URL insert
+  if (imageUrl.startsWith('data:')) {
+    console.log('⚠️ Skipping base64 image (not supported for URL insert)');
+    return false;
+  }
+  
   // Validate image first
   const validation = await validateImage(imageUrl);
   if (!validation.valid) {
     console.warn(`⚠️ Image validation failed: ${validation.reason}`);
-    console.warn('⚠️ Skipping this image');
     return false;
   }
   
   try {
+    // Create new line for image
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
     
-    // Method 1: Look for image button in toolbar (aria-label="Image" or "Картинка")
+    // From user's HTML: Look for side button with gallery icon
+    // svg class="article-editor-desktop--side-button__sideIcon-Lg"
+    // use xlink:href="#add_gallery_e477--react"
     const imageButtonSelectors = [
+      // Side button with gallery icon (from user's HTML)
+      '[class*="side-button"] svg[class*="sideIcon"]',
+      '[class*="sideButton"] svg',
+      'svg[class*="sideIcon"]',
+      // Alternative toolbar selectors
       '[aria-label="Image"]',
       '[aria-label="Картинка"]',
-      '[aria-label="Изображение"]',
-      'button[title*="изображение"]',
-      'button[title*="картин"]'
+      '[aria-label="Изображение"]'
     ];
     
     let imageBtn = null;
     for (const selector of imageButtonSelectors) {
-      imageBtn = await page.$(selector);
-      if (imageBtn) {
-        console.log(`✅ Found image button: ${selector}`);
-        break;
-      }
+      try {
+        imageBtn = await page.$(selector);
+        if (imageBtn) {
+          console.log(`   ✓ Found image button: ${selector}`);
+          // For SVG elements, click the parent container
+          const parent = await imageBtn.evaluateHandle(el => {
+            const div = el.closest('[class*="side-button"]') || el.closest('div') || el.parentElement;
+            return div;
+          });
+          if (parent) {
+            await (parent as any).click();
+          } else {
+            await imageBtn.click();
+          }
+          await page.waitForTimeout(500);
+          break;
+        }
+      } catch {}
     }
     
     if (imageBtn) {
-      await imageBtn.click();
+      // Look for image popup/dialog
       await page.waitForTimeout(500);
       
-      // Look for URL tab/input in image dialog
+      // Look for "По ссылке" (By URL) tab/button
       const urlTabSelectors = [
-        'button:has-text("URL")',
-        'button:has-text("Ссылка")',
         'button:has-text("По ссылке")',
+        'span:has-text("По ссылке")',
         '[data-tab="url"]',
-        'a:has-text("По ссылке")'
+        'button:has-text("URL")'
       ];
       
       for (const selector of urlTabSelectors) {
-        const urlTab = await page.$(selector);
-        if (urlTab) {
-          console.log(`   Found URL tab: ${selector}`);
-          await urlTab.click();
-          await page.waitForTimeout(300);
-          break;
-        }
+        try {
+          const urlTab = await page.$(selector);
+          if (urlTab) {
+            console.log(`   ✓ Found URL tab: ${selector}`);
+            await urlTab.click();
+            await page.waitForTimeout(300);
+            break;
+          }
+        } catch {}
       }
       
       // Find URL input field
-      const urlInput = await page.$('input[placeholder*="URL"], input[placeholder*="ссылк"], input[type="url"], input[placeholder*="http"]');
-      if (urlInput) {
-        await urlInput.fill(imageUrl);
-        await page.waitForTimeout(200);
-        
-        // Find submit/add button
-        const submitBtn = await page.$('button:has-text("Добавить"), button:has-text("Add"), button[type="submit"]');
-        if (submitBtn) {
-          await submitBtn.click();
-        } else {
-          await page.keyboard.press('Enter');
-        }
-        
-        await page.waitForTimeout(2000);
-        console.log('✅ Image added');
-        return true;
-      }
-    }
-    
-    // Method 2: Try plus menu (if editor has + button for blocks)
-    console.log('⚠️ Image button not found, trying plus menu...');
-    const plusBtn = await page.$('button[aria-label="+"], button.add-block, [data-testid="add-block"]');
-    if (plusBtn) {
-      await plusBtn.click();
-      await page.waitForTimeout(300);
+      const urlInputSelectors = [
+        'input[placeholder*="http"]',
+        'input[placeholder*="URL"]',
+        'input[placeholder*="ссылк"]',
+        'input[type="url"]',
+        'input[type="text"]'
+      ];
       
-      const imageOption = await page.$('button:has-text("Изображение"), button:has-text("Image"), [data-type="image"]');
-      if (imageOption) {
-        await imageOption.click();
-        await page.waitForTimeout(500);
-        // Then handle URL input as above...
+      for (const selector of urlInputSelectors) {
+        const urlInput = await page.$(selector);
+        if (urlInput) {
+          console.log(`   ✓ Found URL input: ${selector}`);
+          await urlInput.fill(imageUrl);
+          await page.waitForTimeout(300);
+          
+          // Find submit button or press Enter
+          const submitBtn = await page.$('button:has-text("Добавить"), button:has-text("Add"), button[type="submit"]');
+          if (submitBtn) {
+            await submitBtn.click();
+          } else {
+            await page.keyboard.press('Enter');
+          }
+          
+          await page.waitForTimeout(2000);
+          console.log('✅ Image added via URL');
+          return true;
+        }
       }
     }
     
-    console.log('⚠️ Could not add image, continuing without it');
+    // Fallback: Just paste URL as text - Dzen might auto-embed it
+    console.log('⚠️ Image dialog not found, trying direct URL...');
+    await typeText(page, imageUrl);
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(1000);
+    
     return false;
   } catch (error) {
     console.error('❌ Error adding image:', error);
@@ -781,30 +820,53 @@ async function clickPublish(page: Page, options: DzenPublishOptions = {}): Promi
   console.log('🚀 Publishing article...');
   
   try {
-    // Find publish button
+    // First, close any modal dialogs that might block the publish button
+    // From Railway logs: ReactModal__Overlay was blocking clicks
+    console.log('   Closing any blocking modals...');
+    await closeModals(page);
+    await page.waitForTimeout(500);
+    
+    // Try Escape multiple times to close help popup
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(200);
+    }
+    
+    // From user's HTML: [data-testid="article-publish-btn"]
     const publishSelectors = [
+      '[data-testid="article-publish-btn"]',  // Exact selector from user's HTML
       'button:has-text("Опубликовать")',
-      'button:has-text("Publish")',
-      '[data-testid="publish-button"]',
-      'button[type="submit"]:has-text("Готово")',
-      '.publish-button'
+      '[class*="publishBtnContainer"] button',
+      'button[type="submit"]:has-text("Опубликовать")',
+      '[data-testid="publish-button"]'
     ];
     
     for (const selector of publishSelectors) {
       const publishBtn = await page.$(selector);
       if (publishBtn) {
-        await publishBtn.click();
-        await page.waitForTimeout(2000);
+        console.log(`   ✓ Found publish button: ${selector}`);
         
-        // Wait for confirmation or redirect
-        await page.waitForNavigation({ 
-          waitUntil: 'networkidle',
-          timeout: NAVIGATION_TIMEOUT 
-        }).catch(() => {});
+        // Make sure no modal is blocking - close again
+        await closeModals(page);
+        await page.waitForTimeout(300);
+        
+        // Use force click to bypass any overlay issues
+        await publishBtn.click({ force: true });
+        await page.waitForTimeout(3000);
+        
+        // Wait for navigation or confirmation
+        try {
+          await page.waitForNavigation({ 
+            waitUntil: 'networkidle',
+            timeout: 30000 
+          });
+        } catch {}
         
         // Get the published URL
         const url = page.url();
-        if (url.includes('/a/') || url.includes('/media/') || url.includes('dzen.ru')) {
+        console.log(`   Final URL: ${url}`);
+        
+        if (url.includes('/a/') || url.includes('/media/')) {
           console.log(`✅ Published: ${url}`);
           return url;
         }
@@ -817,6 +879,16 @@ async function clickPublish(page: Page, options: DzenPublishOptions = {}): Promi
             const fullUrl = href.startsWith('http') ? href : `https://dzen.ru${href}`;
             console.log(`✅ Published: ${fullUrl}`);
             return fullUrl;
+          }
+        }
+        
+        // If we're still on editor but button was clicked, might be success
+        if (url.includes('/editor')) {
+          console.log('   Still on editor page, checking for success indicators...');
+          const successIndicators = await page.$('[class*="success"], [class*="published"], .notification-success');
+          if (successIndicators) {
+            console.log('✅ Publication appears successful');
+            return url;
           }
         }
         
