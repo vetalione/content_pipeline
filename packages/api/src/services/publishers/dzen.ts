@@ -134,6 +134,21 @@ async function insertText(page: Page, text: string): Promise<void> {
 }
 
 /**
+ * Scroll to and focus the editor to ensure it's visible
+ * This is critical when adding many sections - page scrolls down
+ */
+async function focusEditor(page: Page): Promise<void> {
+  try {
+    const editor = await page.$('.public-DraftEditor-content[contenteditable="true"]');
+    if (editor) {
+      await editor.scrollIntoViewIfNeeded();
+      await editor.click();
+      await page.waitForTimeout(200);
+    }
+  } catch {}
+}
+
+/**
  * Close any modal dialogs that might block interaction
  * From user's HTML: close button is svg with xlink:href="#cross_9ffc--react"
  */
@@ -548,6 +563,9 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
  */
 async function addTextBlock(page: Page, text: string): Promise<boolean> {
   try {
+    // Scroll to editor first
+    await focusEditor(page);
+    
     // Press Enter to create new block
     await page.keyboard.press('Enter');
     await page.waitForTimeout(200);
@@ -619,6 +637,9 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
   console.log(`💬 Adding blockquote: "${text.substring(0, 40)}..."`);
   
   try {
+    // Scroll to editor first
+    await focusEditor(page);
+    
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
     
@@ -713,77 +734,63 @@ async function addImageFromUrl(page: Page, imageUrl: string): Promise<boolean> {
   }
   
   try {
+    // Scroll to editor first - critical for visibility
+    await focusEditor(page);
+    
     // Create new line for image
     await page.keyboard.press('Enter');
     await page.waitForTimeout(500);
     
-    // From user's HTML: Look for side button with gallery icon
-    // svg class="article-editor-desktop--side-button__sideIcon-Lg"
-    // use xlink:href="#add_gallery_e477--react"
+    // From user's exact HTML:
+    // <button class="article-editor-desktop--side-button__sideButton-1z" data-tip="Вставить изображение">
+    // The side button appears when cursor is on an empty line
     const imageButtonSelectors = [
-      // Side button with gallery icon (from user's HTML)
-      '[class*="side-button"] svg[class*="sideIcon"]',
-      '[class*="sideButton"] svg',
-      'svg[class*="sideIcon"]',
-      // Alternative toolbar selectors
-      '[aria-label="Image"]',
-      '[aria-label="Картинка"]',
-      '[aria-label="Изображение"]'
+      // Exact selectors from user's HTML
+      '[data-tip="Вставить изображение"]',
+      'button[class*="sideButton"]',
+      '.article-editor-desktop--side-button__sideButton-1z',
+      // Fallbacks
+      '[class*="side-button"] button',
+      'button[class*="side-button"]'
     ];
     
-    let imageBtn = null;
+    let clicked = false;
     for (const selector of imageButtonSelectors) {
       try {
-        imageBtn = await page.$(selector);
+        const imageBtn = await page.$(selector);
         if (imageBtn) {
           console.log(`   ✓ Found image button: ${selector}`);
-          // For SVG elements, click the parent container
-          const parent = await imageBtn.evaluateHandle(el => {
-            const div = el.closest('[class*="side-button"]') || el.closest('div') || el.parentElement;
-            return div;
-          });
-          if (parent) {
-            await (parent as any).click();
-          } else {
-            await imageBtn.click();
-          }
-          await page.waitForTimeout(500);
+          // Scroll into view and click
+          await imageBtn.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(200);
+          await imageBtn.click({ force: true });
+          await page.waitForTimeout(1000);
+          clicked = true;
           break;
         }
-      } catch {}
+      } catch (e) {
+        console.log(`   ⚠️ Could not click ${selector}`);
+      }
     }
     
-    if (imageBtn) {
-      // Look for image popup/dialog
+    if (!clicked) {
+      console.log('⚠️ Image button not found or not clickable');
+    }
+    
+    if (clicked) {
+      // Wait for image popup to appear
       await page.waitForTimeout(500);
       
-      // Look for "По ссылке" (By URL) tab/button
-      const urlTabSelectors = [
-        'button:has-text("По ссылке")',
-        'span:has-text("По ссылке")',
-        '[data-tab="url"]',
-        'button:has-text("URL")'
-      ];
-      
-      for (const selector of urlTabSelectors) {
-        try {
-          const urlTab = await page.$(selector);
-          if (urlTab) {
-            console.log(`   ✓ Found URL tab: ${selector}`);
-            await urlTab.click();
-            await page.waitForTimeout(300);
-            break;
-          }
-        } catch {}
-      }
-      
-      // Find URL input field
+      // From user's HTML: <div class="article-editor-desktop--image-popup__urlInput-25">
+      // <input type="text" placeholder="Ссылка" value="">
       const urlInputSelectors = [
-        'input[placeholder*="http"]',
-        'input[placeholder*="URL"]',
-        'input[placeholder*="ссылк"]',
-        'input[type="url"]',
-        'input[type="text"]'
+        // Exact selector from user's HTML
+        '.article-editor-desktop--image-popup__urlInput-25 input',
+        'input[placeholder="Ссылка"]',
+        // Fallbacks
+        '[class*="image-popup"] input',
+        '[class*="urlInput"] input',
+        'input[placeholder*="ссылк"]'
       ];
       
       for (const selector of urlInputSelectors) {
@@ -791,28 +798,23 @@ async function addImageFromUrl(page: Page, imageUrl: string): Promise<boolean> {
         if (urlInput) {
           console.log(`   ✓ Found URL input: ${selector}`);
           
-          // Use clipboard to paste URL (faster and more reliable)
+          // Click and paste URL
           await urlInput.click();
           await page.waitForTimeout(200);
           await insertText(page, imageUrl);
           await page.waitForTimeout(300);
           
-          // ALWAYS press Enter to confirm the URL (user confirmed this is required)
+          // Press Enter to confirm the URL (required!)
           console.log('   Pressing Enter to confirm URL...');
           await page.keyboard.press('Enter');
           await page.waitForTimeout(2000);
-          
-          // Also try clicking submit button if exists
-          const submitBtn = await page.$('button:has-text("Добавить"), button:has-text("Add"), button[type="submit"]');
-          if (submitBtn) {
-            await submitBtn.click();
-            await page.waitForTimeout(1000);
-          }
           
           console.log('✅ Image added via URL');
           return true;
         }
       }
+      
+      console.log('⚠️ URL input not found in popup');
     }
     
     // Fallback: Just paste URL as text - Dzen might auto-embed it
@@ -916,83 +918,110 @@ async function clickPublish(page: Page, options: DzenPublishOptions = {}): Promi
   
   try {
     // First, close any modal dialogs that might block the publish button
-    // From Railway logs: ReactModal__Overlay was blocking clicks
     console.log('   Closing any blocking modals...');
     await closeModals(page);
     await page.waitForTimeout(500);
     
-    // Try Escape multiple times to close help popup
-    for (let i = 0; i < 3; i++) {
-      await page.keyboard.press('Escape');
-      await page.waitForTimeout(200);
-    }
-    
+    // Step 1: Click first publish button to open publish dialog
     // From user's HTML: [data-testid="article-publish-btn"]
-    const publishSelectors = [
-      '[data-testid="article-publish-btn"]',  // Exact selector from user's HTML
+    const firstPublishSelectors = [
+      '[data-testid="article-publish-btn"]',
       'button:has-text("Опубликовать")',
-      '[class*="publishBtnContainer"] button',
-      'button[type="submit"]:has-text("Опубликовать")',
-      '[data-testid="publish-button"]'
+      '[class*="publishBtnContainer"] button'
     ];
     
-    for (const selector of publishSelectors) {
+    let dialogOpened = false;
+    for (const selector of firstPublishSelectors) {
       const publishBtn = await page.$(selector);
       if (publishBtn) {
-        console.log(`   ✓ Found publish button: ${selector}`);
-        
-        // Make sure no modal is blocking - close again
-        await closeModals(page);
-        await page.waitForTimeout(300);
-        
-        // Use force click to bypass any overlay issues
+        console.log(`   ✓ Found first publish button: ${selector}`);
+        await publishBtn.scrollIntoViewIfNeeded();
         await publishBtn.click({ force: true });
-        await page.waitForTimeout(3000);
-        
-        // Wait for navigation or confirmation
-        try {
-          await page.waitForNavigation({ 
-            waitUntil: 'networkidle',
-            timeout: 30000 
-          });
-        } catch {}
-        
-        // Get the published URL
-        const url = page.url();
-        console.log(`   Final URL: ${url}`);
-        
-        if (url.includes('/a/') || url.includes('/media/')) {
-          console.log(`✅ Published: ${url}`);
-          return url;
-        }
-        
-        // Look for success message with link
-        const successLink = await page.$('a[href*="/a/"], a[href*="/media/"]');
-        if (successLink) {
-          const href = await successLink.getAttribute('href');
-          if (href) {
-            const fullUrl = href.startsWith('http') ? href : `https://dzen.ru${href}`;
-            console.log(`✅ Published: ${fullUrl}`);
-            return fullUrl;
-          }
-        }
-        
-        // If we're still on editor but button was clicked, might be success
-        if (url.includes('/editor')) {
-          console.log('   Still on editor page, checking for success indicators...');
-          const successIndicators = await page.$('[class*="success"], [class*="published"], .notification-success');
-          if (successIndicators) {
-            console.log('✅ Publication appears successful');
-            return url;
-          }
-        }
-        
-        return url;
+        await page.waitForTimeout(2000);
+        dialogOpened = true;
+        break;
       }
     }
     
-    console.error('❌ Publish button not found');
-    return null;
+    if (!dialogOpened) {
+      console.error('❌ First publish button not found');
+      return null;
+    }
+    
+    // Step 2: In the publish dialog, click on comment selector to ensure "Все пользователи"
+    // From user's HTML: [data-testid="select-trigger-button-comment"]
+    const commentSelector = await page.$('[data-testid="select-trigger-button-comment"]');
+    if (commentSelector) {
+      console.log('   ✓ Found comment selector, checking value...');
+      const currentValue = await commentSelector.textContent();
+      console.log(`   Current comment setting: ${currentValue}`);
+      
+      // If not already "Все пользователи", click to open dropdown
+      if (!currentValue?.includes('Все пользователи')) {
+        await commentSelector.click();
+        await page.waitForTimeout(500);
+        
+        // Select "Все пользователи" from dropdown
+        const allUsersOption = await page.$('text="Все пользователи"');
+        if (allUsersOption) {
+          await allUsersOption.click();
+          await page.waitForTimeout(500);
+        }
+      }
+    }
+    
+    // Step 3: Click final publish button in dialog
+    // From user's HTML: [data-testid="publish-btn"] (different from article-publish-btn!)
+    const finalPublishSelectors = [
+      '[data-testid="publish-btn"]',  // Exact from user's HTML
+      'button[type="submit"]:has-text("Опубликовать")',
+      '.article-editor-desktop--base-button__primary-1Y:has-text("Опубликовать")'
+    ];
+    
+    for (const selector of finalPublishSelectors) {
+      const finalBtn = await page.$(selector);
+      if (finalBtn) {
+        console.log(`   ✓ Found final publish button: ${selector}`);
+        await finalBtn.click({ force: true });
+        await page.waitForTimeout(3000);
+        break;
+      }
+    }
+    
+    // Wait for navigation
+    try {
+      await page.waitForNavigation({ 
+        waitUntil: 'networkidle',
+        timeout: 30000 
+      });
+    } catch {}
+    
+    // Get the published URL
+    const url = page.url();
+    console.log(`   Final URL: ${url}`);
+    
+    if (url.includes('/a/') || url.includes('/media/')) {
+      console.log(`✅ Published: ${url}`);
+      return url;
+    }
+    
+    // Look for success message with link
+    const successLink = await page.$('a[href*="/a/"], a[href*="/media/"]');
+    if (successLink) {
+      const href = await successLink.getAttribute('href');
+      if (href) {
+        const fullUrl = href.startsWith('http') ? href : `https://dzen.ru${href}`;
+        console.log(`✅ Published: ${fullUrl}`);
+        return fullUrl;
+      }
+    }
+    
+    // Check for success on editor page
+    if (url.includes('/editor')) {
+      console.log('   Still on editor page, article may be published');
+    }
+    
+    return url;
   } catch (error) {
     console.error('❌ Error publishing:', error);
     return null;
