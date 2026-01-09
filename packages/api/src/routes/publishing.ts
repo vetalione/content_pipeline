@@ -134,6 +134,16 @@ publishingRouter.post('/auth/dzen/setup', async (req, res, next) => {
   }
 });
 
+// Helper to convert sameSite from browser extension format to Playwright format
+function convertSameSite(sameSite: string | undefined): 'Strict' | 'Lax' | 'None' {
+  if (!sameSite) return 'Lax';
+  const lower = sameSite.toLowerCase();
+  if (lower === 'strict') return 'Strict';
+  if (lower === 'none' || lower === 'no_restriction') return 'None';
+  // 'lax', 'unspecified', or anything else -> Lax
+  return 'Lax';
+}
+
 // Upload Dzen session (for server deployment)
 // Use this to upload session created locally
 publishingRouter.post('/auth/dzen/session', async (req, res, next) => {
@@ -147,6 +157,24 @@ publishingRouter.post('/auth/dzen/session', async (req, res, next) => {
       });
     }
     
+    // Validate and fix cookie format for Playwright
+    let processedData = sessionData;
+    if (sessionData.cookies && Array.isArray(sessionData.cookies)) {
+      processedData = {
+        ...sessionData,
+        cookies: sessionData.cookies.map((c: any) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path || '/',
+          expires: c.expires ?? c.expirationDate ?? -1,
+          httpOnly: c.httpOnly || false,
+          secure: c.secure !== false,
+          sameSite: convertSameSite(c.sameSite)
+        }))
+      };
+    }
+    
     const fs = await import('fs');
     const path = await import('path');
     const sessionsDir = path.resolve(__dirname, '../services/publishers/sessions');
@@ -158,12 +186,15 @@ publishingRouter.post('/auth/dzen/session', async (req, res, next) => {
     }
     
     // Write session data
-    fs.writeFileSync(sessionPath, JSON.stringify(sessionData, null, 2));
+    fs.writeFileSync(sessionPath, JSON.stringify(processedData, null, 2));
+    
+    console.log(`✅ Dzen session saved with ${processedData.cookies?.length || 0} cookies`);
     
     res.json({
       success: true,
       message: 'Dzen session uploaded successfully',
-      path: sessionPath
+      path: sessionPath,
+      cookieCount: processedData.cookies?.length || 0
     });
   } catch (error) {
     next(error);
