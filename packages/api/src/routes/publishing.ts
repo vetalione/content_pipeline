@@ -105,11 +105,13 @@ publishingRouter.post('/:articleId/reset/:platform', async (req, res, next) => {
   try {
     const { articleId, platform } = req.params;
     
-    // Delete existing publication record for this platform
+    // Delete existing publication records for this platform (case insensitive)
     await prisma.publication.deleteMany({
       where: { 
         articleId,
-        platform: platform.toUpperCase()
+        platform: {
+          in: [platform.toLowerCase(), platform.toUpperCase(), platform]
+        }
       }
     });
     
