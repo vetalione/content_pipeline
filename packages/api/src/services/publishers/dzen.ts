@@ -186,12 +186,10 @@ async function isLoggedIn(page: Page): Promise<boolean> {
  * Navigate to Dzen editor and create new article
  * Real user flow:
  * 1. Go to dzen.ru
- * 2. Click on profile icon
+ * 2. Click on profile icon (avatar)
  * 3. Click "Создать публикацию" (Create publication)
  * 4. Click "Написать статью" (Write article)
  * 5. Land in editor
- * 
- * Fallback: try "Перейти в канал" first if direct path fails
  */
 async function navigateToEditor(page: Page): Promise<boolean> {
   console.log('📝 Navigating to Dzen editor...');
@@ -200,141 +198,195 @@ async function navigateToEditor(page: Page): Promise<boolean> {
     // Step 1: Go to main page
     console.log('   Step 1: Going to dzen.ru...');
     await page.goto('https://dzen.ru', { 
-      waitUntil: 'load',
+      waitUntil: 'networkidle',
       timeout: NAVIGATION_TIMEOUT 
     });
-    await page.waitForTimeout(2000);
+    await page.waitForTimeout(3000);
     console.log(`   Current URL: ${page.url()}`);
     
+    // Log page title for debugging
+    const title = await page.title();
+    console.log(`   Page title: ${title}`);
+    
     // Step 2: Click on profile icon (avatar in header)
-    console.log('   Step 2: Looking for profile icon...');
+    console.log('   Step 2: Looking for profile icon/avatar...');
+    
+    // Try multiple approaches to find profile icon
     const profileIconSelectors = [
-      '[data-testid="user-menu-trigger"]',
+      // By aria-label
       '[aria-label="Меню пользователя"]',
-      '[aria-label="Профиль"]',
+      '[aria-label="Профиль"]', 
+      '[aria-label="Меню"]',
+      // By data-testid
+      '[data-testid="user-menu-trigger"]',
+      '[data-testid="header-user-menu"]',
+      // By class patterns
       'button[class*="UserMenu"]',
       'button[class*="user-menu"]',
-      '.avatar',
-      'header img[src*="avatars"]',
-      'header [class*="Avatar"]',
+      'div[class*="UserMenu"]',
       '[class*="HeaderUserMenu"]',
-      'button:has(img[src*="avatar"])',
+      '[class*="header-user"]',
+      // By avatar image
+      'header img[src*="avatar"]',
+      'header img[src*="yapic"]',
+      '[class*="Avatar"]',
+      '.avatar',
+      // By structure - button with image in header
       'header button:has(img)',
-      'header div[role="button"]:has(img)'
+      'header div[role="button"]:has(img)',
+      'header a:has(img[src*="avatar"])',
+      // Yandex specific
+      '[class*="desk-notif-card"]',
+      '[class*="PSHeader"] button:has(img)',
+      '[class*="Header"] [class*="User"]'
     ];
     
     let profileIcon = null;
     for (const selector of profileIconSelectors) {
-      profileIcon = await page.$(selector);
+      try {
+        profileIcon = await page.$(selector);
+        if (profileIcon) {
+          console.log(`   ✓ Found profile icon: ${selector}`);
+          break;
+        }
+      } catch {}
+    }
+    
+    if (!profileIcon) {
+      // Try to find any clickable element with avatar image
+      console.log('   Trying to find avatar by image...');
+      profileIcon = await page.$('img[src*="avatar"]');
       if (profileIcon) {
-        console.log(`   ✓ Found profile icon: ${selector}`);
-        break;
+        // Click parent element
+        profileIcon = await page.$('img[src*="avatar"] >> xpath=..');
       }
     }
     
     if (profileIcon) {
       await profileIcon.click();
-      await page.waitForTimeout(1500);
+      await page.waitForTimeout(2000);
       console.log('   ✓ Clicked profile icon, menu should be open');
+      
+      // Take screenshot to see menu state
+      await page.screenshot({ path: '/tmp/dzen-after-profile-click.png' });
+      console.log('   📸 Screenshot after profile click saved');
     } else {
-      console.log('   ⚠ Profile icon not found');
+      console.log('   ⚠ Profile icon not found, trying to list all images in header...');
+      
+      // Debug: log what's in the header
+      const headerImages = await page.$$eval('header img', imgs => 
+        imgs.map(img => ({ src: img.src?.substring(0, 50), alt: img.alt }))
+      );
+      console.log('   Header images:', JSON.stringify(headerImages).substring(0, 200));
+      
+      // Try clicking on the first image in header area
+      const firstHeaderImg = await page.$('header img');
+      if (firstHeaderImg) {
+        console.log('   Trying to click first header image...');
+        await firstHeaderImg.click();
+        await page.waitForTimeout(2000);
+      }
     }
     
-    // Step 3: Try direct path - click "Создать публикацию" (Create publication)
+    // Step 3: Click "Создать публикацию" (Create publication)
     console.log('   Step 3: Looking for "Создать публикацию"...');
+    
     const createPublicationSelectors = [
+      'text=Создать публикацию',
       'a:has-text("Создать публикацию")',
       'button:has-text("Создать публикацию")',
       'span:has-text("Создать публикацию")',
+      'div:has-text("Создать публикацию")',
       '[data-testid="create-publication"]',
-      'a[href*="/editor"]'
+      // Menu item patterns
+      '[class*="MenuItem"]:has-text("Создать")',
+      '[class*="menu-item"]:has-text("Создать")',
+      '[role="menuitem"]:has-text("Создать")'
     ];
     
     let createPubBtn = null;
     for (const selector of createPublicationSelectors) {
-      createPubBtn = await page.$(selector);
-      if (createPubBtn) {
-        console.log(`   ✓ Found "Создать публикацию": ${selector}`);
-        await createPubBtn.click();
-        await page.waitForTimeout(2000);
-        console.log(`   ✓ Clicked, now at: ${page.url()}`);
-        break;
-      }
-    }
-    
-    // If "Создать публикацию" not found, try fallback via channel
-    if (!createPubBtn) {
-      console.log('   ⚠ "Создать публикацию" not found, trying via channel...');
-      
-      // Try "Перейти в канал" as fallback
-      const channelSelectors = [
-        'a:has-text("Перейти в канал")',
-        'button:has-text("Перейти в канал")',
-        'a:has-text("Канал")',
-        'a:has-text("Мой канал")',
-        '[href*="/a/"]'
-      ];
-      
-      for (const selector of channelSelectors) {
-        const channelLink = await page.$(selector);
-        if (channelLink) {
-          console.log(`   ✓ Found channel link: ${selector}`);
-          await channelLink.click();
+      try {
+        createPubBtn = await page.$(selector);
+        if (createPubBtn) {
+          console.log(`   ✓ Found "Создать публикацию": ${selector}`);
+          await createPubBtn.click();
           await page.waitForTimeout(2000);
-          console.log(`   ✓ Navigated to channel: ${page.url()}`);
-          
-          // Click profile icon again on channel page
-          for (const pSelector of profileIconSelectors) {
-            const pIcon = await page.$(pSelector);
-            if (pIcon) {
-              await pIcon.click();
-              await page.waitForTimeout(1500);
-              break;
-            }
-          }
-          
-          // Try "Создать публикацию" again
-          for (const cSelector of createPublicationSelectors) {
-            createPubBtn = await page.$(cSelector);
-            if (createPubBtn) {
-              await createPubBtn.click();
-              await page.waitForTimeout(2000);
-              break;
-            }
-          }
+          console.log(`   ✓ Clicked, now at: ${page.url()}`);
           break;
         }
+      } catch {}
+    }
+    
+    if (!createPubBtn) {
+      console.log('   ⚠ "Создать публикацию" not found in menu');
+      
+      // Fallback: try going directly to channel page
+      console.log('   Trying fallback: go to /profile directly...');
+      await page.goto('https://dzen.ru/profile', {
+        waitUntil: 'networkidle',
+        timeout: NAVIGATION_TIMEOUT
+      });
+      await page.waitForTimeout(2000);
+      console.log(`   Now at: ${page.url()}`);
+      
+      // Look for create button on profile page
+      const profileCreateSelectors = [
+        'text=Создать',
+        'text=Написать',
+        'a[href*="/editor"]',
+        'button:has-text("Создать")',
+        'button:has-text("Написать")'
+      ];
+      
+      for (const selector of profileCreateSelectors) {
+        try {
+          const btn = await page.$(selector);
+          if (btn) {
+            console.log(`   ✓ Found create button on profile: ${selector}`);
+            await btn.click();
+            await page.waitForTimeout(2000);
+            break;
+          }
+        } catch {}
       }
     }
     
     // Step 4: Click "Написать статью" (Write article)
     console.log('   Step 4: Looking for "Написать статью"...');
+    
     const writeArticleSelectors = [
+      'text=Написать статью',
       'a:has-text("Написать статью")',
       'button:has-text("Написать статью")',
       'span:has-text("Написать статью")',
+      'text=Статья',
       'a:has-text("Статья")',
       'button:has-text("Статья")',
       '[data-testid="write-article"]',
+      '[class*="MenuItem"]:has-text("Статья")',
       'a[href*="/editor/"][href*="article"]',
-      // Generic article/editor links
       'a[href*="/profile/editor"]'
     ];
     
     let writeArticleBtn = null;
     for (const selector of writeArticleSelectors) {
-      writeArticleBtn = await page.$(selector);
-      if (writeArticleBtn) {
-        console.log(`   ✓ Found "Написать статью": ${selector}`);
-        await writeArticleBtn.click();
-        await page.waitForTimeout(3000);
-        console.log(`   ✓ Clicked, now at: ${page.url()}`);
-        break;
-      }
+      try {
+        writeArticleBtn = await page.$(selector);
+        if (writeArticleBtn) {
+          console.log(`   ✓ Found "Написать статью": ${selector}`);
+          await writeArticleBtn.click();
+          await page.waitForTimeout(3000);
+          console.log(`   ✓ Clicked, now at: ${page.url()}`);
+          break;
+        }
+      } catch {}
     }
     
     // Check if we reached the editor
     const currentUrl = page.url();
+    console.log(`   Final URL: ${currentUrl}`);
+    
     if (currentUrl.includes('/editor')) {
       console.log('✅ Reached editor page');
       
@@ -357,7 +409,7 @@ async function navigateToEditor(page: Page): Promise<boolean> {
     console.log('   ⚠ Editor not found via menu, trying direct URLs...');
     const editorUrls = [
       'https://dzen.ru/profile/editor/new',
-      'https://dzen.ru/editor/new',
+      'https://dzen.ru/editor/new', 
       'https://dzen.ru/media/zen/editor'
     ];
     
@@ -365,16 +417,20 @@ async function navigateToEditor(page: Page): Promise<boolean> {
       try {
         console.log(`   Trying: ${url}`);
         await page.goto(url, { 
-          waitUntil: 'load',
+          waitUntil: 'networkidle',
           timeout: NAVIGATION_TIMEOUT 
         });
         await page.waitForTimeout(2000);
         
+        // Check for editor
         const editor = await page.$('.public-DraftEditor-content, [contenteditable="true"]');
         if (editor) {
           console.log('✅ Editor found via direct URL');
           return true;
         }
+        
+        // Check if redirected somewhere useful
+        console.log(`   Redirected to: ${page.url()}`);
       } catch (e: any) {
         console.log(`   Failed: ${e.message?.substring(0, 50)}`);
       }
@@ -384,11 +440,17 @@ async function navigateToEditor(page: Page): Promise<boolean> {
     console.error('❌ Navigation error:', error.message);
   }
   
-  // Take screenshot for debugging
+  // Take final screenshot for debugging
   try {
     const screenshotPath = '/tmp/dzen-editor-debug.png';
     await page.screenshot({ path: screenshotPath, fullPage: true });
     console.log(`📸 Debug screenshot saved: ${screenshotPath}`);
+    
+    // Also save page HTML for debugging
+    const html = await page.content();
+    const fs = await import('fs');
+    fs.default.writeFileSync('/tmp/dzen-debug.html', html);
+    console.log('📄 Debug HTML saved: /tmp/dzen-debug.html');
   } catch {}
   
   console.error('❌ Could not find Dzen editor');
