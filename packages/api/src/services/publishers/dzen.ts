@@ -76,43 +76,120 @@ function ensureSessionsDir() {
 }
 
 /**
- * Type text directly using keyboard
- * Clipboard API doesn't work in headless mode, so we use keyboard.type()
+ * Type text using keyboard (slower but reliable fallback)
  */
 async function typeText(page: Page, text: string): Promise<void> {
-  // Use keyboard.type with small delay for reliability
-  // This works in headless mode unlike clipboard API
   await page.keyboard.type(text, { delay: 3 });
 }
 
 /**
+ * Paste text using clipboard API
+ * With proper permissions this should work in headless mode
+ */
+async function clipboardPaste(page: Page, text: string): Promise<boolean> {
+  try {
+    // Method 1: Use execCommand via evaluate
+    // The function runs in browser context where document/window exist
+    await page.evaluate(`
+      (function(t) {
+        const textarea = document.createElement('textarea');
+        textarea.value = t;
+        textarea.style.position = 'fixed';
+        textarea.style.left = '-9999px';
+        document.body.appendChild(textarea);
+        textarea.select();
+        document.execCommand('copy');
+        document.body.removeChild(textarea);
+      })(\`${text.replace(/`/g, '\\`').replace(/\\/g, '\\\\')}\`)
+    `);
+    
+    await page.keyboard.press('Control+v');
+    await page.waitForTimeout(100);
+    return true;
+  } catch (e) {
+    console.log('⚠️ Clipboard method 1 failed, trying method 2...');
+  }
+  
+  try {
+    // Method 2: Use clipboard API directly
+    await page.evaluate(`navigator.clipboard.writeText(\`${text.replace(/`/g, '\\`').replace(/\\/g, '\\\\')}\`)`);
+    await page.keyboard.press('Control+v');
+    await page.waitForTimeout(100);
+    return true;
+  } catch (e) {
+    console.log('⚠️ Clipboard method 2 failed, falling back to typing');
+  }
+  
+  return false;
+}
+
+/**
+ * Smart text input - tries clipboard first, falls back to typing
+ */
+async function insertText(page: Page, text: string): Promise<void> {
+  const clipboardWorked = await clipboardPaste(page, text);
+  if (!clipboardWorked) {
+    await typeText(page, text);
+  }
+}
+
+/**
  * Close any modal dialogs that might block interaction
+ * From user's HTML: close button is svg with xlink:href="#cross_9ffc--react"
  */
 async function closeModals(page: Page): Promise<void> {
+  console.log('🔄 Closing any blocking modals...');
+  
   try {
-    // Try pressing Escape to close any modal
-    await page.keyboard.press('Escape');
-    await page.waitForTimeout(300);
-    
-    // Try clicking outside modal overlay
-    const overlays = [
-      '.ReactModal__Overlay',
-      '[class*="help-popup"]',
-      '[class*="overlay"]'
+    // First try the specific help popup close button (SVG cross icon)
+    // From user's HTML: <svg viewBox="0 0 24 24"><use xlink:href="#cross_9ffc--react"></use></svg>
+    const crossSelectors = [
+      'svg use[*|href="#cross_9ffc--react"]',
+      'svg use[xlink\\:href*="cross"]',
+      '[class*="help-popup"] svg',
+      '.ReactModal__Content svg',
+      '[class*="close"] svg',
+      'button svg use[*|href*="cross"]'
     ];
     
-    for (const selector of overlays) {
-      const overlay = await page.$(selector);
-      if (overlay) {
-        // Try to find close button within overlay
-        const closeBtn = await overlay.$('button[aria-label="Close"], button[aria-label="Закрыть"], .close-button');
-        if (closeBtn) {
-          await closeBtn.click();
-          await page.waitForTimeout(200);
+    for (const selector of crossSelectors) {
+      try {
+        const crossIcon = await page.$(selector);
+        if (crossIcon) {
+          // Click the parent button/div containing the SVG
+          const parent = await crossIcon.evaluateHandle(el => {
+            return el.closest('button') || el.closest('[class*="close"]') || el.closest('div') || el.parentElement;
+          });
+          if (parent) {
+            console.log(`   ✓ Found close button: ${selector}`);
+            await (parent as any).click();
+            await page.waitForTimeout(500);
+            console.log('   ✓ Clicked close button');
+            return; // Successfully closed
+          }
         }
-      }
+      } catch {}
     }
-  } catch {}
+    
+    // Fallback: Try pressing Escape multiple times
+    console.log('   Trying Escape key...');
+    for (let i = 0; i < 3; i++) {
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(200);
+    }
+    
+    // Check if modal is still there
+    const modal = await page.$('.ReactModal__Overlay');
+    if (modal) {
+      console.log('   Modal still present, trying to click outside...');
+      // Click on the overlay itself to close
+      await modal.click({ position: { x: 10, y: 10 } });
+      await page.waitForTimeout(300);
+    }
+    
+  } catch (e) {
+    console.log('   ⚠️ Error closing modals:', e);
+  }
 }
 /**
  * Load saved browser context with cookies
@@ -140,13 +217,15 @@ async function loadContext(browser: Browser): Promise<BrowserContext> {
     
     return await browser.newContext({ 
       storageState: DZEN_STATE_FILE,
-      viewport: { width: 1280, height: 900 }
+      viewport: { width: 1280, height: 900 },
+      permissions: ['clipboard-read', 'clipboard-write']
     });
   }
   
   console.log('⚠️ No saved Dzen session found. Run setupDzenAuth() first.');
   return await browser.newContext({
-    viewport: { width: 1280, height: 900 }
+    viewport: { width: 1280, height: 900 },
+    permissions: ['clipboard-read', 'clipboard-write']
   });
 }
 
@@ -346,11 +425,20 @@ async function navigateToEditor(page: Page): Promise<boolean> {
           timeout: ACTION_TIMEOUT
         });
         console.log('✅ Draft.js editor loaded');
+        
+        // CRITICAL: Close help popup immediately after editor loads
+        // This popup blocks all interactions until closed
+        await page.waitForTimeout(1000); // Wait for popup to appear
+        await closeModals(page);
+        await page.waitForTimeout(500);
+        
         return true;
       } catch {
         const editor = await page.$('[contenteditable="true"]');
         if (editor) {
           console.log('✅ Found contenteditable editor');
+          await page.waitForTimeout(1000);
+          await closeModals(page);
           return true;
         }
       }
@@ -427,8 +515,8 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
         await page.keyboard.press('Control+a');
         await page.waitForTimeout(100);
         
-        // Use keyboard.type() - clipboard doesn't work in headless
-        await typeText(page, title);
+        // Use clipboard paste with typing fallback
+        await insertText(page, title);
         
         console.log('✅ Title set');
         return true;
@@ -441,7 +529,7 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
       await editor.click();
       await page.waitForTimeout(300);
       await page.keyboard.press('Control+a');
-      await typeText(page, title);
+      await insertText(page, title);
       console.log('✅ Title set via fallback');
       return true;
     }
@@ -464,8 +552,8 @@ async function addTextBlock(page: Page, text: string): Promise<boolean> {
     await page.keyboard.press('Enter');
     await page.waitForTimeout(200);
     
-    // Use keyboard.type() - clipboard doesn't work in headless
-    await typeText(page, text);
+    // Use clipboard paste with typing fallback
+    await insertText(page, text);
     await page.waitForTimeout(100);
     
     return true;
@@ -487,8 +575,8 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
     
-    // Use keyboard.type() - clipboard doesn't work in headless
-    await typeText(page, text);
+    // Use clipboard paste with typing fallback
+    await insertText(page, text);
     await page.waitForTimeout(200);
     
     // Select all text in this block (Ctrl+A in Draft.js selects current block content)
@@ -534,8 +622,8 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
     await page.keyboard.press('Enter');
     await page.waitForTimeout(300);
     
-    // Use keyboard.type() - clipboard doesn't work in headless
-    await typeText(page, text);
+    // Use clipboard paste with typing fallback
+    await insertText(page, text);
     await page.waitForTimeout(200);
     
     // Select all text in this line (use Shift+Home/End for current line)
@@ -702,18 +790,25 @@ async function addImageFromUrl(page: Page, imageUrl: string): Promise<boolean> {
         const urlInput = await page.$(selector);
         if (urlInput) {
           console.log(`   ✓ Found URL input: ${selector}`);
-          await urlInput.fill(imageUrl);
+          
+          // Use clipboard to paste URL (faster and more reliable)
+          await urlInput.click();
+          await page.waitForTimeout(200);
+          await insertText(page, imageUrl);
           await page.waitForTimeout(300);
           
-          // Find submit button or press Enter
+          // ALWAYS press Enter to confirm the URL (user confirmed this is required)
+          console.log('   Pressing Enter to confirm URL...');
+          await page.keyboard.press('Enter');
+          await page.waitForTimeout(2000);
+          
+          // Also try clicking submit button if exists
           const submitBtn = await page.$('button:has-text("Добавить"), button:has-text("Add"), button[type="submit"]');
           if (submitBtn) {
             await submitBtn.click();
-          } else {
-            await page.keyboard.press('Enter');
+            await page.waitForTimeout(1000);
           }
           
-          await page.waitForTimeout(2000);
           console.log('✅ Image added via URL');
           return true;
         }
@@ -722,7 +817,7 @@ async function addImageFromUrl(page: Page, imageUrl: string): Promise<boolean> {
     
     // Fallback: Just paste URL as text - Dzen might auto-embed it
     console.log('⚠️ Image dialog not found, trying direct URL...');
-    await typeText(page, imageUrl);
+    await insertText(page, imageUrl);
     await page.keyboard.press('Enter');
     await page.waitForTimeout(1000);
     
