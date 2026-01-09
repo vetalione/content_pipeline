@@ -177,43 +177,92 @@ async function isLoggedIn(page: Page): Promise<boolean> {
 async function navigateToEditor(page: Page): Promise<boolean> {
   console.log('📝 Navigating to Dzen editor...');
   
+  // First, go to profile to find the channel ID and create button
   try {
-    // Go to Dzen Studio / Editor
-    await page.goto('https://dzen.ru/editor/new', { 
-      waitUntil: 'load',  // 'load' is faster than 'networkidle'
+    console.log('   Going to profile page...');
+    await page.goto('https://dzen.ru/profile', { 
+      waitUntil: 'load',
       timeout: NAVIGATION_TIMEOUT 
     });
+    await page.waitForTimeout(3000);
     
-    // Wait for page to stabilize
-    await page.waitForTimeout(2000);
+    console.log(`   Current URL: ${page.url()}`);
     
-    // Wait for editor to load
-    await page.waitForSelector('[contenteditable="true"], .editor-content, [class*="Editor"]', {
-      timeout: ACTION_TIMEOUT
-    });
+    // Look for "Write" or "Create" button
+    const createSelectors = [
+      'a[href*="/editor"]',
+      'button:has-text("Написать")',
+      'button:has-text("Создать")',
+      'a:has-text("Написать")',
+      'a:has-text("Создать статью")',
+      '[data-testid="create-article"]',
+      '.zen-ui-button:has-text("Написать")'
+    ];
     
-    console.log('✅ Editor loaded');
-    return true;
-  } catch (error) {
-    console.error('❌ Failed to load editor:', error);
-    
-    // Try alternative paths
-    try {
-      await page.goto('https://dzen.ru/profile', { timeout: NAVIGATION_TIMEOUT });
-      
-      // Click "Create" or "Write" button
-      const createBtn = await page.$('a[href*="/editor"], button:has-text("Написать"), button:has-text("Создать"), [data-testid="create-button"]');
-      if (createBtn) {
-        await createBtn.click();
-        await page.waitForNavigation({ waitUntil: 'networkidle' });
-        return true;
+    for (const selector of createSelectors) {
+      const btn = await page.$(selector);
+      if (btn) {
+        console.log(`   Found create button: ${selector}`);
+        await btn.click();
+        await page.waitForTimeout(3000);
+        console.log(`   Redirected to: ${page.url()}`);
+        break;
       }
-    } catch (e) {
-      console.error('❌ Alternative path also failed:', e);
     }
     
-    return false;
+    // Check if we're in an editor now
+    const currentUrl = page.url();
+    if (currentUrl.includes('/editor')) {
+      console.log('✅ Reached editor page');
+      
+      // Wait for Draft.js editor to load
+      await page.waitForSelector('.public-DraftEditor-content[contenteditable="true"]', {
+        timeout: ACTION_TIMEOUT
+      });
+      console.log('✅ Draft.js editor loaded');
+      return true;
+    }
+    
+    // Try direct URL patterns
+    const editorUrls = [
+      'https://dzen.ru/profile/editor/new',
+      'https://dzen.ru/editor/new',
+      'https://dzen.ru/media/zen/editor'
+    ];
+    
+    for (const url of editorUrls) {
+      try {
+        console.log(`   Trying direct URL: ${url}`);
+        await page.goto(url, { 
+          waitUntil: 'load',
+          timeout: NAVIGATION_TIMEOUT 
+        });
+        await page.waitForTimeout(3000);
+        
+        // Check for Draft.js editor
+        const editor = await page.$('.public-DraftEditor-content[contenteditable="true"]');
+        if (editor) {
+          console.log('✅ Draft.js editor found');
+          return true;
+        }
+        
+        // Check for any contenteditable
+        const contentEditable = await page.$('[contenteditable="true"]');
+        if (contentEditable) {
+          console.log('✅ Found contenteditable editor');
+          return true;
+        }
+      } catch (e: any) {
+        console.log(`   Failed: ${e.message?.substring(0, 50)}`);
+      }
+    }
+    
+  } catch (error: any) {
+    console.error('❌ Navigation error:', error.message);
   }
+  
+  console.error('❌ Could not find Dzen editor');
+  return false;
 }
 
 /**
