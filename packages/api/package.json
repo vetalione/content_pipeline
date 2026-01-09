@@ -4,7 +4,8 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "tsx watch src/index.ts",
-    "build": "prisma generate && npx tsc && cp -f Adele.jpg dist/Adele.jpg 2>/dev/null || true",
+    "build": "npx tsc && cp -f Adele.jpg dist/Adele.jpg 2>/dev/null || true",
+    "build:local": "prisma generate && npx tsc && cp -f Adele.jpg dist/Adele.jpg 2>/dev/null || true",
     "start": "node dist/index.js",
     "db:generate": "prisma generate",
     "db:migrate": "prisma migrate deploy",
