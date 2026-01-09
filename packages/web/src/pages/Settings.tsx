@@ -72,6 +72,16 @@ export default function Settings() {
     setSaving(platform);
     setMessage(null);
 
+    // Helper to convert sameSite from browser extension format to Playwright format
+    const convertSameSite = (sameSite: string | undefined): 'Strict' | 'Lax' | 'None' => {
+      if (!sameSite) return 'Lax';
+      const lower = sameSite.toLowerCase();
+      if (lower === 'strict') return 'Strict';
+      if (lower === 'none' || lower === 'no_restriction') return 'None';
+      // 'lax', 'unspecified', or anything else -> Lax
+      return 'Lax';
+    };
+
     try {
       // Parse cookies - support both array format and object format
       let cookies;
@@ -89,13 +99,19 @@ export default function Settings() {
               path: c.path || '/',
               expires: c.expirationDate || -1,
               httpOnly: c.httpOnly || false,
-              secure: c.secure || true,
-              sameSite: c.sameSite || 'Lax'
+              secure: c.secure !== false, // default to true
+              sameSite: convertSameSite(c.sameSite)
             })),
             origins: []
           };
         } else {
-          // Already in Playwright format
+          // Already in Playwright format - but still validate sameSite
+          if (parsed.cookies && Array.isArray(parsed.cookies)) {
+            parsed.cookies = parsed.cookies.map((c: any) => ({
+              ...c,
+              sameSite: convertSameSite(c.sameSite)
+            }));
+          }
           cookies = parsed;
         }
       } catch (e) {
