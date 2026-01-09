@@ -100,6 +100,28 @@ publishingRouter.post('/:articleId/publish', async (req, res, next) => {
   }
 });
 
+// Reset publication status for republishing
+publishingRouter.post('/:articleId/reset/:platform', async (req, res, next) => {
+  try {
+    const { articleId, platform } = req.params;
+    
+    // Delete existing publication record for this platform
+    await prisma.publication.deleteMany({
+      where: { 
+        articleId,
+        platform: platform.toUpperCase()
+      }
+    });
+    
+    res.json({ 
+      success: true, 
+      message: `Publication status reset for ${platform}. You can now republish.`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Get publications for article
 publishingRouter.get('/:articleId/publications', async (req, res, next) => {
   try {
