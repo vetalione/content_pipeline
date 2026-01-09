@@ -152,7 +152,28 @@ JSON only: {"isRelevant": bool, "confidence": num, "reasoning": "brief - is cele
       throw new Error('Invalid JSON response');
     }
 
-    return JSON.parse(jsonMatch[0]) as ImageValidationResult;
+    const parsed = JSON.parse(jsonMatch[0]) as ImageValidationResult;
+    
+    // SAFETY CHECK: If reasoning says celebrity is NOT visible but confidence is high, fix it
+    const reasoning = (parsed.reasoning || '').toLowerCase();
+    const celebrityLower = celebrityName.toLowerCase();
+    
+    const negativeIndicators = [
+      'not visible', 'not in', 'cannot identify', 'not a photograph of',
+      'does not contain', 'does not show', 'not present', 'is not', 
+      'wrong person', 'different person', 'no photo of', 'not the',
+      'illustration', 'graphic', 'cartoon', 'drawing', 'not a photo'
+    ];
+    
+    const hasNegativeIndicator = negativeIndicators.some(neg => reasoning.includes(neg));
+    
+    if (hasNegativeIndicator && parsed.confidence > 30) {
+      console.log(`    ⚠️ Safety override: reasoning says NO but confidence was ${parsed.confidence}%, setting to 0%`);
+      parsed.confidence = 0;
+      parsed.isRelevant = false;
+    }
+    
+    return parsed;
 
   } catch (error) {
     return {

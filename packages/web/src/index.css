@@ -6,6 +6,11 @@
   body {
     @apply bg-gray-50 text-gray-900;
   }
+  
+  /* Prevent horizontal overflow globally */
+  html, body, #root {
+    @apply overflow-x-hidden max-w-full;
+  }
 }
 
 @layer components {
@@ -22,10 +27,21 @@
   }
   
   .card {
-    @apply bg-white rounded-xl shadow-sm p-6;
+    @apply bg-white rounded-xl shadow-sm p-6 overflow-hidden;
   }
   
   .input {
     @apply w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary focus:border-transparent outline-none;
+  }
+  
+  /* Ensure prose content doesn't overflow */
+  .prose {
+    @apply break-words;
+    word-break: break-word;
+    overflow-wrap: break-word;
+  }
+  
+  .prose pre {
+    @apply overflow-x-auto max-w-full;
   }
 }

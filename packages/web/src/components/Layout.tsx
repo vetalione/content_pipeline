@@ -8,9 +8,9 @@ interface LayoutProps {
 
 export default function Layout({ children }: LayoutProps) {
   return (
-    <div className="min-h-screen flex">
+    <div className="min-h-screen flex overflow-x-hidden">
       {/* Sidebar */}
-      <aside className="w-64 bg-white border-r border-gray-200 p-6">
+      <aside className="w-64 flex-shrink-0 bg-white border-r border-gray-200 p-6">
         <div className="mb-8">
           <h1 className="text-2xl font-bold text-primary">Content Pipeline</h1>
           <p className="text-sm text-gray-500">Контент-конвейер</p>
@@ -43,9 +43,9 @@ export default function Layout({ children }: LayoutProps) {
         </nav>
       </aside>
       
-      {/* Main content */}
-      <main className="flex-1 p-8 overflow-x-hidden">
-        <div className="max-w-6xl">
+      {/* Main content - use calc to ensure it never exceeds viewport minus sidebar */}
+      <main className="flex-1 p-8 overflow-x-auto" style={{ maxWidth: 'calc(100vw - 16rem)' }}>
+        <div className="w-full max-w-5xl">
           {children}
         </div>
       </main>

@@ -39,7 +39,10 @@ export default function Settings() {
 
   const checkAuthStatus = async () => {
     try {
-      const response = await fetch(`${API_URL}/api/publishing/auth/dzen/status`);
+      const response = await fetch(`${API_URL}/api/publishing/auth/dzen/status`, {
+        signal: AbortSignal.timeout(5000) // 5 second timeout
+      });
+      if (!response.ok) throw new Error('API error');
       const data = await response.json();
       
       setPlatforms(prev => prev.map(p => 
