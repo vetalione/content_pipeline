@@ -282,17 +282,12 @@ async function navigateToEditor(page: Page): Promise<boolean> {
     console.log('   Step 4: Looking for "Написать статью"...');
     
     const writeArticleSelectors = [
-      // Likely similar pattern
-      '[data-testid="write-article"]',
-      '[aria-label="Написать статью"]',
-      '[aria-label="Статья"]',
-      '[class*="article"] button',
+      // From user's HTML - exact selector
+      '[data-testid="profile-menu-create-article"]',
+      // Fallbacks
       'button:has-text("Написать статью")',
-      'a:has-text("Написать статью")',
       'span:has-text("Написать статью")',
-      'button:has-text("Статья")',
-      'a:has-text("Статья")',
-      // Link to editor
+      '[aria-label="Написать статью"]',
       'a[href*="/editor/"]',
       'a[href*="/profile/editor"]'
     ];
