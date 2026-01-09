@@ -883,6 +883,11 @@ async function addSection(page: Page, section: DzenSection): Promise<boolean> {
     // Add section heading
     await addHeading(page, `${section.number}. ${section.heading}`);
     
+    // Add image IMMEDIATELY after heading (per Dzen editor logic)
+    if (section.imageUrl) {
+      await addImageFromUrl(page, section.imageUrl);
+    }
+    
     // Add first paragraph
     await addTextBlock(page, section.paragraph1);
     
@@ -891,14 +896,9 @@ async function addSection(page: Page, section: DzenSection): Promise<boolean> {
       await addTextBlock(page, section.paragraph2);
     }
     
-    // Add blockquote if exists
+    // Add blockquote/quote if exists
     if (section.blockquote) {
       await addBlockquote(page, section.blockquote);
-    }
-    
-    // Add image if exists
-    if (section.imageUrl) {
-      await addImageFromUrl(page, section.imageUrl);
     }
     
     return true;
@@ -1073,15 +1073,21 @@ export async function publishToDzen(
       };
     }
     
-    // Set title
+    // Step 1: Set title (first action)
     await setTitle(page, content.title);
     
-    // Add teaser/intro
+    // Step 2: Upload cover IMMEDIATELY after title (per Dzen editor logic)
+    const coverImage = article.coverImages?.[0] || article.coverImage;
+    if (coverImage) {
+      await uploadCover(page, coverImage);
+    }
+    
+    // Step 3: Add teaser/intro
     if (content.teaser) {
       await addTextBlock(page, content.teaser);
     }
     
-    // Add sections
+    // Step 4+: Add sections (each: heading -> image -> paragraphs -> quote)
     for (const section of content.sections) {
       await addSection(page, section);
     }
@@ -1105,12 +1111,6 @@ export async function publishToDzen(
     // Add brand ending
     if (content.brandEnding) {
       await addTextBlock(page, content.brandEnding);
-    }
-    
-    // Upload cover if exists
-    const coverImage = article.coverImages?.[0] || article.coverImage;
-    if (coverImage) {
-      await uploadCover(page, coverImage);
     }
     
     // Publish (or save as draft)
