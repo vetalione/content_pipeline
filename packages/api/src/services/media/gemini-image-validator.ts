@@ -110,35 +110,36 @@ export async function validateImageRelevance(
     const base64Image = Buffer.from(imageData.buffer).toString('base64');
 
     // Prompt that REQUIRES the celebrity to be in the photo
+    // IMPORTANT: "confidence" = how SUITABLE the image is, NOT how sure you are about your answer
     const prompt = `You are an image validator for a biography article about "${celebrityName}".
 
-REQUIREMENT: "${celebrityName}" MUST be visible in this photo. We need photos OF this specific person.
+TASK: Rate how SUITABLE this image is for the article (0-100 score).
 
-TOPIC/SCENE to illustrate: "${description}"
+TOPIC/SCENE we need: "${description}"
 
-CRITICAL RULES:
-1. The celebrity "${celebrityName}" MUST be in the photo - this is MANDATORY
-2. Stock photos, random people, or thematic images WITHOUT the celebrity = REJECT (0-20%)
-3. Childhood/young photos: the person may look different, but it must BE them
-4. If you cannot identify "${celebrityName}" in the image = REJECT
-5. COLLAGES/GRIDS: If image shows multiple photos arranged in a grid/collage/timeline = LOWER SCORE (-20%)
-   - We need a SINGLE clean photo, not a compilation
-   - Collages often have low quality individual images
+SCORING RULES (confidence = SUITABILITY score, NOT your certainty):
+- 85-100: "${celebrityName}" is clearly visible + matches the topic + high quality single photo
+- 70-84: "${celebrityName}" is visible + partially matches topic
+- 55-69: "${celebrityName}" is visible but generic photo
+- 40-54: Might be "${celebrityName}" but hard to confirm
+- 20-39: Wrong person or poor quality
+- 0-19: "${celebrityName}" is NOT in the image AT ALL (illustration, wrong person, stock photo)
 
-SCORING (only if celebrity IS in photo):
-- 85-100: Celebrity confirmed + context matches + SINGLE high-quality photo
-- 70-84: Celebrity confirmed + context partially matches + clean photo
-- 55-69: Celebrity confirmed + generic photo (doesn't contradict topic)
-- 40-54: Celebrity probably there but hard to confirm, OR it's a collage/grid
-- 0-39: Celebrity NOT in photo, or wrong person, or contradicts description
+CRITICAL: If "${celebrityName}" is NOT visible in the image → score MUST be 0-19!
+- Random illustrations, graphics, book covers without the person = 0-10%
+- Stock photos of other people = 0-10%
+- Photos of different celebrities = 0-10%
 
-IMAGE QUALITY ISSUES (reduce score):
-- Collage/grid with multiple photos: -20%
-- Blurry or heavily compressed: -15%
-- Cropped face cut off: -15%
-- Watermarks covering face: -10%
+QUALITY PENALTIES (subtract from score):
+- Collage/grid of multiple photos: -20%
+- Blurry/compressed: -15%
+- Face cropped off: -15%
+- Large watermarks: -10%
 
-JSON only: {"isRelevant": bool, "confidence": num, "reasoning": "brief - is celebrity visible? quality issues?"}`;
+OUTPUT FORMAT (JSON only, no other text):
+{"isRelevant": true/false, "confidence": 0-100, "reasoning": "one sentence"}
+
+REMEMBER: "confidence" = how GOOD this image is for the article, NOT how sure you are!`;
 
     const result = await model.generateContent([
       { inlineData: { data: base64Image, mimeType: imageData.mimeType } },
