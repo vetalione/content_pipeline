@@ -184,57 +184,163 @@ async function isLoggedIn(page: Page): Promise<boolean> {
 
 /**
  * Navigate to Dzen editor and create new article
+ * Real user flow:
+ * 1. Go to dzen.ru
+ * 2. Click on profile icon
+ * 3. Select "Перейти в канал" (Go to channel)
+ * 4. Click on profile icon again  
+ * 5. Select "Создать публикацию" (Create publication)
+ * 6. Land in editor
  */
 async function navigateToEditor(page: Page): Promise<boolean> {
   console.log('📝 Navigating to Dzen editor...');
   
-  // First, go to profile to find the channel ID and create button
   try {
-    console.log('   Going to profile page...');
-    await page.goto('https://dzen.ru/profile', { 
+    // Step 1: Go to main page to find profile menu
+    console.log('   Step 1: Going to dzen.ru main page...');
+    await page.goto('https://dzen.ru', { 
       waitUntil: 'load',
       timeout: NAVIGATION_TIMEOUT 
     });
-    await page.waitForTimeout(3000);
-    
+    await page.waitForTimeout(2000);
     console.log(`   Current URL: ${page.url()}`);
     
-    // Look for "Write" or "Create" button
-    const createSelectors = [
-      'a[href*="/editor"]',
-      'button:has-text("Написать")',
-      'button:has-text("Создать")',
-      'a:has-text("Написать")',
-      'a:has-text("Создать статью")',
-      '[data-testid="create-article"]',
-      '.zen-ui-button:has-text("Написать")'
+    // Step 2: Click on profile icon (avatar in header)
+    console.log('   Step 2: Looking for profile icon...');
+    const profileIconSelectors = [
+      '[data-testid="user-menu-trigger"]',
+      '[aria-label="Меню пользователя"]',
+      '[aria-label="Профиль"]',
+      'button[class*="UserMenu"]',
+      'button[class*="user-menu"]',
+      '.avatar',
+      'header img[src*="avatars"]',
+      'header [class*="Avatar"]',
+      '[class*="HeaderUserMenu"]',
+      'button:has(img[src*="avatar"])'
     ];
     
-    for (const selector of createSelectors) {
-      const btn = await page.$(selector);
-      if (btn) {
-        console.log(`   Found create button: ${selector}`);
-        await btn.click();
-        await page.waitForTimeout(3000);
-        console.log(`   Redirected to: ${page.url()}`);
+    let profileIcon = null;
+    for (const selector of profileIconSelectors) {
+      profileIcon = await page.$(selector);
+      if (profileIcon) {
+        console.log(`   ✓ Found profile icon: ${selector}`);
         break;
       }
     }
     
-    // Check if we're in an editor now
+    if (!profileIcon) {
+      profileIcon = await page.$('header button:has(img), header div[role="button"]:has(img)');
+    }
+    
+    if (profileIcon) {
+      await profileIcon.click();
+      await page.waitForTimeout(1500);
+      console.log('   ✓ Clicked profile icon');
+    } else {
+      console.log('   ⚠ Profile icon not found, trying direct channel URL...');
+      await page.goto('https://dzen.ru/profile', { waitUntil: 'load', timeout: NAVIGATION_TIMEOUT });
+      await page.waitForTimeout(2000);
+    }
+    
+    // Step 3: Click "Перейти в канал" (Go to channel)
+    console.log('   Step 3: Looking for "Go to channel" option...');
+    const channelSelectors = [
+      'a:has-text("Перейти в канал")',
+      'button:has-text("Перейти в канал")',
+      '[href*="/a/"]',
+      'a:has-text("Канал")',
+      'a:has-text("Мой канал")',
+      '[data-testid="channel-link"]'
+    ];
+    
+    let channelLink = null;
+    for (const selector of channelSelectors) {
+      channelLink = await page.$(selector);
+      if (channelLink) {
+        console.log(`   ✓ Found channel link: ${selector}`);
+        await channelLink.click();
+        await page.waitForTimeout(2000);
+        console.log(`   ✓ Navigated to channel: ${page.url()}`);
+        break;
+      }
+    }
+    
+    if (!channelLink) {
+      console.log('   ⚠ Channel link not found in menu');
+    }
+    
+    // Step 4: Click profile icon again on channel page
+    console.log('   Step 4: Looking for profile icon on channel page...');
+    await page.waitForTimeout(1000);
+    
+    const channelMenuSelectors = [
+      '[data-testid="user-menu-trigger"]',
+      'button[class*="UserMenu"]',
+      '[aria-label="Меню"]',
+      'header button:has(img)',
+      '[class*="channel-header"] button'
+    ];
+    
+    let channelMenu = null;
+    for (const selector of channelMenuSelectors) {
+      channelMenu = await page.$(selector);
+      if (channelMenu) {
+        console.log(`   ✓ Found channel menu: ${selector}`);
+        await channelMenu.click();
+        await page.waitForTimeout(1500);
+        break;
+      }
+    }
+    
+    // Step 5: Click "Создать публикацию" (Create publication)
+    console.log('   Step 5: Looking for "Create publication" option...');
+    const createSelectors = [
+      'a:has-text("Создать публикацию")',
+      'button:has-text("Создать публикацию")',
+      'a:has-text("Написать статью")',
+      'button:has-text("Написать статью")',
+      'a:has-text("Создать статью")',
+      'a:has-text("Написать")',
+      '[data-testid="create-article"]',
+      'a[href*="/editor/"]',
+      'a[href*="/editor/new"]'
+    ];
+    
+    let createBtn = null;
+    for (const selector of createSelectors) {
+      createBtn = await page.$(selector);
+      if (createBtn) {
+        console.log(`   ✓ Found create button: ${selector}`);
+        await createBtn.click();
+        await page.waitForTimeout(3000);
+        console.log(`   ✓ Navigated to: ${page.url()}`);
+        break;
+      }
+    }
+    
+    // Check if we reached the editor
     const currentUrl = page.url();
     if (currentUrl.includes('/editor')) {
       console.log('✅ Reached editor page');
       
-      // Wait for Draft.js editor to load
-      await page.waitForSelector('.public-DraftEditor-content[contenteditable="true"]', {
-        timeout: ACTION_TIMEOUT
-      });
-      console.log('✅ Draft.js editor loaded');
-      return true;
+      try {
+        await page.waitForSelector('.public-DraftEditor-content[contenteditable="true"]', {
+          timeout: ACTION_TIMEOUT
+        });
+        console.log('✅ Draft.js editor loaded');
+        return true;
+      } catch {
+        const editor = await page.$('[contenteditable="true"]');
+        if (editor) {
+          console.log('✅ Found contenteditable editor');
+          return true;
+        }
+      }
     }
     
-    // Try direct URL patterns
+    // Fallback: Try known direct URLs
+    console.log('   ⚠ Editor not found via menu, trying direct URLs...');
     const editorUrls = [
       'https://dzen.ru/profile/editor/new',
       'https://dzen.ru/editor/new',
@@ -243,24 +349,16 @@ async function navigateToEditor(page: Page): Promise<boolean> {
     
     for (const url of editorUrls) {
       try {
-        console.log(`   Trying direct URL: ${url}`);
+        console.log(`   Trying: ${url}`);
         await page.goto(url, { 
           waitUntil: 'load',
           timeout: NAVIGATION_TIMEOUT 
         });
-        await page.waitForTimeout(3000);
+        await page.waitForTimeout(2000);
         
-        // Check for Draft.js editor
-        const editor = await page.$('.public-DraftEditor-content[contenteditable="true"]');
+        const editor = await page.$('.public-DraftEditor-content, [contenteditable="true"]');
         if (editor) {
-          console.log('✅ Draft.js editor found');
-          return true;
-        }
-        
-        // Check for any contenteditable
-        const contentEditable = await page.$('[contenteditable="true"]');
-        if (contentEditable) {
-          console.log('✅ Found contenteditable editor');
+          console.log('✅ Editor found via direct URL');
           return true;
         }
       } catch (e: any) {
@@ -272,9 +370,17 @@ async function navigateToEditor(page: Page): Promise<boolean> {
     console.error('❌ Navigation error:', error.message);
   }
   
+  // Take screenshot for debugging
+  try {
+    const screenshotPath = '/tmp/dzen-editor-debug.png';
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    console.log(`📸 Debug screenshot saved: ${screenshotPath}`);
+  } catch {}
+  
   console.error('❌ Could not find Dzen editor');
   return false;
 }
+
 
 /**
  * Set article title using Draft.js editor
