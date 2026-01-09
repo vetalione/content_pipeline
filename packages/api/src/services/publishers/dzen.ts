@@ -76,6 +76,17 @@ function ensureSessionsDir() {
 }
 
 /**
+ * Helper: Write text to clipboard and paste in page context
+ * Uses page.evaluate to run navigator.clipboard in browser context
+ */
+async function clipboardPaste(page: Page, text: string): Promise<void> {
+  // Use evaluate to write to clipboard in browser context
+  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
+  // @ts-ignore - navigator exists in browser context
+  await page.evaluate((t) => window.navigator.clipboard.writeText(t), text);
+  await page.keyboard.press('Control+v');
+}
+/**
  * Load saved browser context with cookies
  */
 async function loadContext(browser: Browser): Promise<BrowserContext> {
@@ -266,18 +277,21 @@ async function navigateToEditor(page: Page): Promise<boolean> {
 }
 
 /**
- * Set article title
+ * Set article title using Draft.js editor
  */
 async function setTitle(page: Page, title: string): Promise<boolean> {
   console.log(`📰 Setting title: "${title.substring(0, 50)}..."`);
   
   try {
-    // Find title input (usually first contenteditable or specific title field)
+    // Dzen uses Draft.js - title is in the first editor with h1
+    // Selector: .article-editor-desktop--editable-input__editableInput-oN h1
     const titleSelectors = [
+      '.article-editor-desktop--editable-input__editableInput-oN .public-DraftEditor-content',
+      'h1.zen-editor-block .public-DraftStyleDefault-block',
       '[data-testid="title-input"]',
       'h1[contenteditable="true"]',
       '.article-title[contenteditable="true"]',
-      '[class*="Title"][contenteditable="true"]',
+      '[class*="titleInput"] .public-DraftEditor-content',
       '[placeholder*="Заголовок"]',
       '[placeholder*="Title"]'
     ];
@@ -286,17 +300,31 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
       const titleInput = await page.$(selector);
       if (titleInput) {
         await titleInput.click();
-        await titleInput.fill(title);
+        await page.waitForTimeout(300);
+        
+        // Draft.js doesn't support .fill() - use keyboard
+        // First select all existing text, then paste new
+        await page.keyboard.press('Control+a');
+        await page.waitForTimeout(100);
+        
+        // Use clipboard paste for speed
+        await clipboardPaste(page, title);
+
+        
         console.log('✅ Title set');
         return true;
       }
     }
     
-    // Fallback: try first contenteditable
-    const firstEditable = await page.$('[contenteditable="true"]');
+    // Fallback: try first contenteditable (title input)
+    const firstEditable = await page.$('.article-editor-desktop--editable-input__editableInput-oN [contenteditable="true"]');
     if (firstEditable) {
       await firstEditable.click();
-      await firstEditable.fill(title);
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Control+a');
+      await clipboardPaste(page, title);
+
+      console.log('✅ Title set via fallback');
       return true;
     }
     
@@ -309,7 +337,8 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
 }
 
 /**
- * Add text block to editor
+ * Add text block to editor using clipboard paste
+ * This is faster and more reliable than keyboard.type()
  */
 async function addTextBlock(page: Page, text: string): Promise<boolean> {
   try {
@@ -317,30 +346,63 @@ async function addTextBlock(page: Page, text: string): Promise<boolean> {
     await page.keyboard.press('Enter');
     await page.waitForTimeout(200);
     
-    // Type the text
-    await page.keyboard.type(text, { delay: 5 });
+    // Use clipboard paste instead of typing - much faster!
+    await clipboardPaste(page, text);
+
+    await page.waitForTimeout(300);
     
     return true;
   } catch (error) {
-    console.error('❌ Error adding text block:', error);
-    return false;
+    // Fallback to typing if clipboard fails
+    console.log('⚠️ Clipboard failed, falling back to typing');
+    try {
+      await page.keyboard.type(text, { delay: 5 });
+      return true;
+    } catch (e) {
+      console.error('❌ Error adding text block:', e);
+      return false;
+    }
   }
 }
 
 /**
  * Add heading block (H2/H3)
+ * Dzen uses H3 for section headers, visible in toolbar as "Heading 3"
  */
-async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<boolean> {
-  console.log(`📌 Adding heading: "${text.substring(0, 40)}..."`);
+async function addHeading(page: Page, text: string, level: 2 | 3 = 3): Promise<boolean> {
+  console.log(`📌 Adding H${level} heading: "${text.substring(0, 40)}..."`);
   
   try {
     // Press Enter for new block
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(300);
     
-    // Try markdown shortcut (## for H2, ### for H3)
-    const prefix = level === 2 ? '## ' : '### ';
-    await page.keyboard.type(prefix + text);
+    // Paste the text (faster than typing)
+    await clipboardPaste(page, text);
+
+    await page.waitForTimeout(300);
+    
+    // Select all text in this block
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(100);
+    
+    // Click H2 or H3 button in toolbar
+    // Toolbar button selectors from HTML: aria-label="Heading 2" or "Heading 3"
+    const headingSelector = level === 2 
+      ? '[aria-label="Heading 2"]' 
+      : '[aria-label="Heading 3"]';
+    
+    const headingBtn = await page.$(headingSelector);
+    if (headingBtn) {
+      await headingBtn.click();
+      await page.waitForTimeout(200);
+      console.log(`✅ Applied H${level} formatting`);
+    } else {
+      console.log(`⚠️ H${level} button not found, text added as paragraph`);
+    }
+    
+    // Move to end of line
+    await page.keyboard.press('End');
     await page.keyboard.press('Enter');
     
     return true;
@@ -351,17 +413,42 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
 }
 
 /**
- * Add blockquote
+ * Add blockquote using toolbar button
+ * According to user: need to first clear formatting, then apply blockquote
  */
 async function addBlockquote(page: Page, text: string): Promise<boolean> {
   console.log(`💬 Adding blockquote: "${text.substring(0, 40)}..."`);
   
   try {
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(300);
     
-    // Try markdown shortcut for quote
-    await page.keyboard.type('> ' + text);
+    // Paste the text
+    await clipboardPaste(page, text);
+
+    await page.waitForTimeout(300);
+    
+    // Select all text in this block
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(100);
+    
+    // First, clear any formatting (user said this is needed before applying blockquote)
+    // Try Ctrl+\ or find "clear formatting" button
+    await page.keyboard.press('Control+\\');
+    await page.waitForTimeout(100);
+    
+    // Click blockquote button in toolbar (aria-label="Blockquote")
+    const quoteBtn = await page.$('[aria-label="Blockquote"]');
+    if (quoteBtn) {
+      await quoteBtn.click();
+      await page.waitForTimeout(200);
+      console.log('✅ Applied blockquote formatting');
+    } else {
+      console.log('⚠️ Blockquote button not found');
+    }
+    
+    // Move to end
+    await page.keyboard.press('End');
     await page.keyboard.press('Enter');
     
     return true;
@@ -372,41 +459,141 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
 }
 
 /**
- * Upload image from URL
+ * Validate image before upload
+ * Dzen requirements: max 10MB, min 300px width
+ */
+async function validateImage(imageUrl: string): Promise<{valid: boolean, reason?: string}> {
+  try {
+    console.log(`🔍 Validating image: ${imageUrl.substring(0, 50)}...`);
+    
+    // Try to get image info via HEAD request
+    const response = await fetch(imageUrl, { method: 'HEAD' });
+    
+    if (!response.ok) {
+      return { valid: false, reason: `Image not accessible: ${response.status}` };
+    }
+    
+    // Check file size
+    const contentLength = response.headers.get('content-length');
+    if (contentLength) {
+      const sizeBytes = parseInt(contentLength, 10);
+      const sizeMB = sizeBytes / (1024 * 1024);
+      
+      if (sizeMB > 10) {
+        return { valid: false, reason: `Image too large: ${sizeMB.toFixed(1)}MB (max 10MB)` };
+      }
+      
+      console.log(`   Size: ${sizeMB.toFixed(2)}MB ✅`);
+    }
+    
+    // Note: Cannot easily check dimensions without downloading image
+    // Could add image-size library if needed
+    
+    return { valid: true };
+  } catch (error: any) {
+    console.warn(`⚠️ Could not validate image: ${error.message}`);
+    // Allow upload even if validation fails - Dzen will reject if invalid
+    return { valid: true };
+  }
+}
+
+/**
+ * Upload image from URL using toolbar button
+ * Dzen limits: max 10MB, min 300px width
  */
 async function addImageFromUrl(page: Page, imageUrl: string): Promise<boolean> {
   console.log(`🖼️ Adding image: ${imageUrl.substring(0, 60)}...`);
   
+  // Validate image first
+  const validation = await validateImage(imageUrl);
+  if (!validation.valid) {
+    console.warn(`⚠️ Image validation failed: ${validation.reason}`);
+    console.warn('⚠️ Skipping this image');
+    return false;
+  }
+  
   try {
     await page.keyboard.press('Enter');
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(300);
     
-    // Try to find image upload button or use keyboard shortcut
-    // Dzen editor usually has /image or similar command
+    // Method 1: Look for image button in toolbar (aria-label="Image" or "Картинка")
+    const imageButtonSelectors = [
+      '[aria-label="Image"]',
+      '[aria-label="Картинка"]',
+      '[aria-label="Изображение"]',
+      'button[title*="изображение"]',
+      'button[title*="картин"]'
+    ];
     
-    // Method 1: Try slash command
-    await page.keyboard.type('/image');
-    await page.waitForTimeout(500);
-    
-    // Press Enter to select image block
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(500);
-    
-    // Look for URL input in image dialog
-    const urlInput = await page.$('input[placeholder*="URL"], input[placeholder*="ссылк"], input[type="url"]');
-    if (urlInput) {
-      await urlInput.fill(imageUrl);
-      await page.keyboard.press('Enter');
-      await page.waitForTimeout(1000);
-      return true;
+    let imageBtn = null;
+    for (const selector of imageButtonSelectors) {
+      imageBtn = await page.$(selector);
+      if (imageBtn) {
+        console.log(`✅ Found image button: ${selector}`);
+        break;
+      }
     }
     
-    // Method 2: Try paste URL directly (some editors support this)
-    await page.keyboard.type(imageUrl);
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(1000);
+    if (imageBtn) {
+      await imageBtn.click();
+      await page.waitForTimeout(500);
+      
+      // Look for URL tab/input in image dialog
+      const urlTabSelectors = [
+        'button:has-text("URL")',
+        'button:has-text("Ссылка")',
+        'button:has-text("По ссылке")',
+        '[data-tab="url"]',
+        'a:has-text("По ссылке")'
+      ];
+      
+      for (const selector of urlTabSelectors) {
+        const urlTab = await page.$(selector);
+        if (urlTab) {
+          console.log(`   Found URL tab: ${selector}`);
+          await urlTab.click();
+          await page.waitForTimeout(300);
+          break;
+        }
+      }
+      
+      // Find URL input field
+      const urlInput = await page.$('input[placeholder*="URL"], input[placeholder*="ссылк"], input[type="url"], input[placeholder*="http"]');
+      if (urlInput) {
+        await urlInput.fill(imageUrl);
+        await page.waitForTimeout(200);
+        
+        // Find submit/add button
+        const submitBtn = await page.$('button:has-text("Добавить"), button:has-text("Add"), button[type="submit"]');
+        if (submitBtn) {
+          await submitBtn.click();
+        } else {
+          await page.keyboard.press('Enter');
+        }
+        
+        await page.waitForTimeout(2000);
+        console.log('✅ Image added');
+        return true;
+      }
+    }
     
-    return true;
+    // Method 2: Try plus menu (if editor has + button for blocks)
+    console.log('⚠️ Image button not found, trying plus menu...');
+    const plusBtn = await page.$('button[aria-label="+"], button.add-block, [data-testid="add-block"]');
+    if (plusBtn) {
+      await plusBtn.click();
+      await page.waitForTimeout(300);
+      
+      const imageOption = await page.$('button:has-text("Изображение"), button:has-text("Image"), [data-type="image"]');
+      if (imageOption) {
+        await imageOption.click();
+        await page.waitForTimeout(500);
+        // Then handle URL input as above...
+      }
+    }
+    
+    console.log('⚠️ Could not add image, continuing without it');
+    return false;
   } catch (error) {
     console.error('❌ Error adding image:', error);
     return false;
