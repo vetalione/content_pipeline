@@ -50,8 +50,8 @@ const SESSIONS_DIR = path.resolve(__dirname, './sessions');
 const DZEN_STATE_FILE = path.join(SESSIONS_DIR, 'dzen-state.json');
 
 // Timeouts
-const NAVIGATION_TIMEOUT = 30000;
-const ACTION_TIMEOUT = 10000;
+const NAVIGATION_TIMEOUT = 60000;  // 60 seconds for slow pages
+const ACTION_TIMEOUT = 15000;      // 15 seconds for actions
 const UPLOAD_TIMEOUT = 60000;
 
 interface DzenPublishResult {
@@ -136,9 +136,12 @@ async function navigateToEditor(page: Page): Promise<boolean> {
   try {
     // Go to Dzen Studio / Editor
     await page.goto('https://dzen.ru/editor/new', { 
-      waitUntil: 'networkidle',
+      waitUntil: 'load',  // 'load' is faster than 'networkidle'
       timeout: NAVIGATION_TIMEOUT 
     });
+    
+    // Wait for page to stabilize
+    await page.waitForTimeout(2000);
     
     // Wait for editor to load
     await page.waitForSelector('[contenteditable="true"], .editor-content, [class*="Editor"]', {
@@ -466,6 +469,16 @@ export async function publishToDzen(
   console.log(`📰 Publishing to Dzen: "${article.celebrityName}"`);
   console.log(`${'='.repeat(60)}\n`);
   
+  // Check if session exists first
+  ensureSessionsDir();
+  if (!fs.existsSync(DZEN_STATE_FILE)) {
+    console.error('❌ No Dzen session found. Please upload cookies via Settings page first.');
+    return {
+      success: false,
+      error: 'Не авторизован в Дзен. Перейдите в Настройки и загрузите cookies из браузера.'
+    };
+  }
+  
   const content = article.content as ArticleContent | null;
   
   if (!content) {
@@ -487,11 +500,18 @@ export async function publishToDzen(
     const context = await loadContext(browser);
     const page = await context.newPage();
     
-    // Navigate to Dzen
+    // Set default timeout
+    page.setDefaultTimeout(NAVIGATION_TIMEOUT);
+    
+    // Navigate to Dzen - use 'load' instead of 'networkidle' which can timeout
+    console.log('🌐 Navigating to dzen.ru...');
     await page.goto('https://dzen.ru/', { 
-      waitUntil: 'networkidle',
+      waitUntil: 'load',
       timeout: NAVIGATION_TIMEOUT 
     });
+    
+    // Wait a bit for JavaScript to initialize
+    await page.waitForTimeout(2000);
     
     // Check if logged in
     if (!await isLoggedIn(page)) {

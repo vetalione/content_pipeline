@@ -44,8 +44,10 @@ export default function Layout({ children }: LayoutProps) {
       </aside>
       
       {/* Main content */}
-      <main className="flex-1 p-8">
-        {children}
+      <main className="flex-1 p-8 overflow-x-hidden">
+        <div className="max-w-6xl">
+          {children}
+        </div>
       </main>
     </div>
   );
