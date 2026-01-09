@@ -12,10 +12,10 @@
     }
   },
   "scripts": {
-    "build": "npx tsc",
-    "dev": "npx tsc --watch"
+    "build": "tsc",
+    "dev": "tsc --watch"
   },
-  "devDependencies": {
+  "dependencies": {
     "typescript": "^5.3.3"
   }
 }
