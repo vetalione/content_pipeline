@@ -46,7 +46,7 @@ interface DzenSection {
   imageUrl?: string;
 }
 
-const SESSIONS_DIR = path.resolve(__dirname, './sessions');
+const SESSIONS_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'dzen-sessions') : path.resolve(__dirname, './sessions');
 const DZEN_STATE_FILE = path.join(SESSIONS_DIR, 'dzen-state.json');
 
 // Timeouts
@@ -579,9 +579,14 @@ async function addTextBlock(page: Page, text: string): Promise<boolean> {
     await focusEditor(page);
     
     // Note: caller already pressed Enter, we're on new line
-    // Just type the text
+    // Press Enter first
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    
+    // Type the text
+    console.log('   Adding paragraph: ' + text.substring(0, 40) + '...');
     await insertText(page, text);
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(200);
     
     // Press Enter to move to next line
     await page.keyboard.press('Enter');
@@ -606,9 +611,18 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
     await focusEditor(page);
     
     // Note: caller already pressed Enter, we're on new line
-    // Type the heading text (without pressing Enter first)
+    // Press Enter first to ensure new line
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    
+    // Type the heading text
+    console.log('   Typing heading text...');
     await insertText(page, text);
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
+    
+    // Count blocks for diagnostics
+    const blocksCount = await page.$$eval('.public-DraftStyleDefault-block', els => els.length);
+    console.log('   Editor has ' + blocksCount + ' blocks');
     
     // Select all text in current line using End then Shift+Home
     // In Draft.js, End+Shift+Home selects the current line content when focus is in a block
@@ -666,9 +680,14 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
     await focusEditor(page);
     
     // Note: caller already pressed Enter, we're on new line
+    // Press Enter first
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    
     // Type the quote text
+    console.log('   Typing blockquote...');
     await insertText(page, text);
-    await page.waitForTimeout(300);
+    await page.waitForTimeout(500);
     
     // Select all text in current line using End then Shift+Home
     await page.keyboard.press('End');
@@ -1257,6 +1276,12 @@ export async function publishToDzen(
     const coverImage = article.coverImages?.[0] || article.coverImage;
     if (coverImage) {
       await uploadCover(page, coverImage);
+      // Close any popups and move to next line
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(300);
+      console.log('   Cover uploaded, moved to next line');
     }
     
     // Step 3: Add teaser/intro
