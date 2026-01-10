@@ -526,14 +526,17 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
         await titleInput.click();
         await page.waitForTimeout(300);
         
-        // Select all existing text and replace with new title
-        await page.keyboard.press('Control+a');
-        await page.waitForTimeout(100);
-        
-        // Use clipboard paste with typing fallback
+        // Just type the title - editor starts empty, no need to select
         await insertText(page, title);
+        await page.waitForTimeout(200);
+        
+        // Move cursor to end to ensure we're ready for next content
+        await page.keyboard.press('End');
         
         console.log('✅ Title set');
+        // Move to new line after title
+        await page.keyboard.press('Enter');
+        await page.waitForTimeout(300);
         return true;
       }
     }
@@ -543,8 +546,10 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
     if (editor) {
       await editor.click();
       await page.waitForTimeout(300);
-      await page.keyboard.press('Control+a');
+      
+      // Just type - no Ctrl+A
       await insertText(page, title);
+      await page.keyboard.press('End');
       console.log('✅ Title set via fallback');
       return true;
     }
@@ -600,13 +605,10 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
     await insertText(page, text);
     await page.waitForTimeout(300);
     
-    // Select all text in current line using triple click
-    // Triple click is more reliable than keyboard selection
-    const editor = await page.$('[contenteditable="true"]');
-    if (editor) {
-      await editor.click({ clickCount: 3 });
-      await page.waitForTimeout(300);
-    }
+    // Select all text in current block using Ctrl+A
+    // In Draft.js, Ctrl+A selects the current block content when focus is in a block
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(500);
     
     // Wait for toolbar to appear (it shows up when text is selected)
     const toolbarSelector = '[class*="editorToolbar"]';
@@ -660,12 +662,9 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
     await insertText(page, text);
     await page.waitForTimeout(300);
     
-    // Select all text in current line using triple click
-    const editor = await page.$('[contenteditable="true"]');
-    if (editor) {
-      await editor.click({ clickCount: 3 });
-      await page.waitForTimeout(300);
-    }
+    // Select all text in current block using Ctrl+A
+    await page.keyboard.press('Control+a');
+    await page.waitForTimeout(500);
     
     // Wait for toolbar to appear
     const toolbarSelector = '[class*="editorToolbar"]';
@@ -882,11 +881,130 @@ async function uploadCover(page: Page, coverImage: CoverImage | string): Promise
     ? coverImage 
     : (coverImage.processedImageUrl || coverImage.originalImageUrl);
   
-  console.log(`🎨 Uploading cover image using same method as regular images...`);
+  console.log(`�� Uploading cover image...`);
   
-  // In Dzen editor, cover is added the same way as regular images
-  // Just add it as the first image right after the title
-  return await addImageFromUrl(page, imageUrl);
+  // Note: setTitle already pressed Enter to move to new line
+  // Now we need to add the cover image
+  
+  // If it's a base64 image, we need to upload as file
+  if (imageUrl.startsWith('data:')) {
+    console.log('   Cover is base64, uploading as file...');
+    return await uploadImageAsFile(page, imageUrl);
+  }
+  
+  // For URL images, use the standard method
+  // But DON'T press Enter first (setTitle already did)
+  return await addImageFromUrlNoPressEnter(page, imageUrl);
+}
+
+/**
+ * Upload image as file (for base64 images)
+ */
+async function uploadImageAsFile(page: Page, base64Data: string): Promise<boolean> {
+  try {
+    // Click image button
+    const imageBtn = await page.$('[data-tip="Вставить изображение"]');
+    if (!imageBtn) {
+      console.log('⚠️ Image button not found');
+      return false;
+    }
+    
+    await imageBtn.scrollIntoViewIfNeeded();
+    await imageBtn.click({ force: true });
+    await page.waitForTimeout(1000);
+    
+    // Click "Загрузите файл" button (from user's HTML)
+    const uploadBtnSelectors = [
+      'button:has-text("Загрузите файл")',
+      '.article-editor-desktop--image-popup__fileButton-Ye',
+      'button[class*="fileButton"]',
+      'button:has-text("файл")'
+    ];
+    
+    for (const selector of uploadBtnSelectors) {
+      const uploadBtn = await page.$(selector);
+      if (uploadBtn) {
+        console.log(`   ✓ Found upload button: ${selector}`);
+        
+        // Set up file chooser listener before clicking
+        const [fileChooser] = await Promise.all([
+          page.waitForEvent('filechooser'),
+          uploadBtn.click()
+        ]);
+        
+        // Convert base64 to buffer
+        const base64Content = base64Data.replace(/^data:image\/\w+;base64,/, '');
+        const buffer = Buffer.from(base64Content, 'base64');
+        
+        // Create temp file path
+        const tempPath = '/tmp/cover_image.jpg';
+        const fs = await import('fs');
+        fs.writeFileSync(tempPath, buffer);
+        
+        // Upload the file
+        await fileChooser.setFiles(tempPath);
+        await page.waitForTimeout(3000);
+        
+        console.log('✅ Cover image uploaded as file');
+        return true;
+      }
+    }
+    
+    console.log('⚠️ Upload file button not found');
+    return false;
+  } catch (error) {
+    console.error('❌ Error uploading image as file:', error);
+    return false;
+  }
+}
+
+/**
+ * Add image from URL without pressing Enter first (for cover after title)
+ */
+async function addImageFromUrlNoPressEnter(page: Page, imageUrl: string): Promise<boolean> {
+  console.log(`🖼️ Adding image (no Enter): ${imageUrl.substring(0, 60)}...`);
+  
+  try {
+    await focusEditor(page);
+    
+    // DON'T press Enter - cursor is already on new line from setTitle
+    
+    const imageBtn = await page.$('[data-tip="Вставить изображение"]');
+    if (!imageBtn) {
+      console.log('⚠️ Image button not found');
+      return false;
+    }
+    
+    await imageBtn.scrollIntoViewIfNeeded();
+    await imageBtn.click({ force: true });
+    await page.waitForTimeout(1000);
+    
+    // Try URL tab first
+    const urlTab = await page.$('button:has-text("По ссылке"), span:has-text("По ссылке")');
+    if (urlTab) {
+      await urlTab.click();
+      await page.waitForTimeout(500);
+    }
+    
+    // Find URL input
+    const urlInput = await page.$('input[placeholder="Ссылка"], [class*="urlInput"] input');
+    if (urlInput) {
+      await urlInput.click();
+      await page.waitForTimeout(200);
+      await insertText(page, imageUrl);
+      await page.waitForTimeout(300);
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(2000);
+      console.log('✅ Image added via URL');
+      return true;
+    }
+    
+    console.log('⚠️ URL input not found');
+    return false;
+  } catch (error) {
+    console.error('❌ Error:', error);
+    return false;
+  }
 }
 
 /**
