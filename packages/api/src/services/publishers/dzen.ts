@@ -535,22 +535,47 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
     // We need to click directly on it (ArrowUp doesn't work)
     
     // From user's HTML: title line is first block with class public-DraftStyleDefault-block
+    // Title line is first block - but we need to click INSIDE it (on span)
+    // Structure: div.public-DraftStyleDefault-block > span > br[data-text="true"]
     const titleLineSelectors = [
+      '.public-DraftStyleDefault-block:first-child span',  // Click on span inside first block
       '.public-DraftStyleDefault-block:first-child',
-      '.public-DraftEditor-content > div > div:first-child',
-      '[data-contents="true"] > div:first-child',
-      '.DraftEditor-root .public-DraftStyleDefault-block:first-of-type'
+      '[data-contents="true"] > div:first-child span',
+      '[contenteditable="true"] [data-block="true"]:first-child'
     ];
     
     let titleLineClicked = false;
     for (const selector of titleLineSelectors) {
       const titleLine = await page.$(selector);
       if (titleLine) {
-        console.log(`   ✓ Found title line: ${selector}`);
-        await titleLine.click();
+        console.log(`   ✓ Found title element: ${selector}`);
+        await titleLine.scrollIntoViewIfNeeded();
+        await titleLine.click({ force: true });
         await page.waitForTimeout(300);
+        
+        // Verify focus is in editor
+        const activeElement = await page.evaluate('document.activeElement?.tagName');
+        console.log(`   Active element after click: ${activeElement}`);
+        
         titleLineClicked = true;
         break;
+      }
+    }
+    
+    // If selectors didn't work, try focusing the contenteditable directly
+    if (!titleLineClicked) {
+      console.log('   ⚠️ Selectors failed, trying direct focus...');
+      const editor = await page.$('[contenteditable="true"]');
+      if (editor) {
+        await editor.focus();
+        await page.waitForTimeout(200);
+        // Move to beginning
+        await page.keyboard.down('Control');
+        await page.keyboard.press('Home');
+        await page.keyboard.up('Control');
+        await page.waitForTimeout(200);
+        titleLineClicked = true;
+        console.log('   ✓ Focused editor directly');
       }
     }
     
@@ -572,8 +597,17 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
     
     // Now we're on the title line - just type the title
     // It will automatically be formatted as H1 (title)
+    console.log('   Typing title text...');
     await insertText(page, title);
-    await page.waitForTimeout(200);
+    await page.waitForTimeout(500);
+    
+    // Verify title was typed by checking blocks count
+    const blocksAfterTitle = await page.$$eval('.public-DraftStyleDefault-block', els => els.length);
+    console.log('   Blocks after title: ' + blocksAfterTitle);
+    await takeScreenshot(page, 'after-title');
+    
+    // Take screenshot to verify
+    await takeScreenshot(page, 'after-title');
     
     console.log('✅ Title set');
     
@@ -1051,6 +1085,16 @@ async function addImageFromUrlNoPressEnter(page: Page, imageUrl: string): Promis
       await page.waitForTimeout(300);
       await page.keyboard.press('Enter');
       await page.waitForTimeout(2000);
+      
+      // CRITICAL: Click back into editor after image is added
+      await page.keyboard.press('Escape');
+      await page.waitForTimeout(300);
+      const editorAfter = await page.$('[contenteditable="true"]');
+      if (editorAfter) {
+        await editorAfter.click();
+        await page.waitForTimeout(200);
+      }
+      
       console.log('✅ Image added via URL');
       return true;
     }
@@ -1300,12 +1344,35 @@ export async function publishToDzen(
     const coverImage = article.coverImages?.[0] || article.coverImage;
     if (coverImage) {
       await uploadCover(page, coverImage);
-      // Close any popups and move to next line
+      // CRITICAL: After image upload, focus is lost!
+      // Need to click back into editor first
       await page.keyboard.press('Escape');
+      await page.waitForTimeout(500);
+      
+      // Click on the LAST block in editor to restore cursor position
+      const lastBlock = await page.$('.public-DraftStyleDefault-block:last-child');
+      if (lastBlock) {
+        await lastBlock.scrollIntoViewIfNeeded();
+        await lastBlock.click();
+        console.log('   ✓ Clicked back into editor (last block)');
+      } else {
+        // Fallback: click on editor itself
+        const editor = await page.$('[contenteditable="true"]');
+        if (editor) {
+          await editor.click();
+          console.log('   ✓ Clicked back into editor');
+        }
+      }
       await page.waitForTimeout(300);
+      
+      // Now press Enter to move to next line
       await page.keyboard.press('Enter');
       await page.waitForTimeout(300);
-      console.log('   Cover uploaded, moved to next line');
+      // Take screenshot to verify cover and cursor
+      await takeScreenshot(page, 'after-cover');
+      // Take screenshot to verify cover and cursor
+      await takeScreenshot(page, 'after-cover');
+      console.log('   Cover uploaded, cursor restored');
     }
     
     // Step 3: Add teaser/intro
