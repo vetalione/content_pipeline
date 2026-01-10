@@ -47,6 +47,7 @@ interface DzenSection {
 }
 
 const SESSIONS_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'dzen-sessions') : path.resolve(__dirname, './sessions');
+const SCREENSHOTS_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'dzen-screenshots') : '/tmp/dzen-screenshots';
 const DZEN_STATE_FILE = path.join(SESSIONS_DIR, 'dzen-state.json');
 
 // Timeouts
@@ -69,6 +70,24 @@ interface DzenPublishOptions {
 /**
  * Ensure sessions directory exists
  */
+// Screenshot helper for debugging
+async function takeScreenshot(page: Page, name: string): Promise<string | null> {
+  try {
+    if (!fs.existsSync(SCREENSHOTS_DIR)) {
+      fs.mkdirSync(SCREENSHOTS_DIR, { recursive: true });
+    }
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filename = `${name}_${timestamp}.png`;
+    const filepath = path.join(SCREENSHOTS_DIR, filename);
+    await page.screenshot({ path: filepath, fullPage: true });
+    console.log(`📸 Screenshot saved: ${filename}`);
+    return filename;
+  } catch (error) {
+    console.log('Could not take screenshot:', error);
+    return null;
+  }
+}
+
 function ensureSessionsDir() {
   if (!fs.existsSync(SESSIONS_DIR)) {
     fs.mkdirSync(SESSIONS_DIR, { recursive: true });
@@ -637,6 +656,9 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
       console.log('   ✓ Toolbar appeared');
     } catch {
       console.log('   ⚠️ Toolbar not visible, trying anyway...');
+      await takeScreenshot(page, 'toolbar-not-visible');
+      await takeScreenshot(page, 'toolbar-not-visible');
+      await takeScreenshot(page, 'toolbar-not-visible');
     }
     
     // Click H2 or H3 button in toolbar
@@ -651,6 +673,8 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
       console.log(`   ✅ Applied H${level} formatting`);
     } else {
       console.log(`   ⚠️ H${level} button not found, text added as paragraph`);
+      await takeScreenshot(page, 'heading-btn-missing');
+      await takeScreenshot(page, 'heading-btn-missing');
     }
     
     // CRITICAL: Remove selection BEFORE pressing Enter (otherwise text gets deleted!)

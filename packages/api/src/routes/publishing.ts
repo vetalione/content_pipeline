@@ -242,3 +242,83 @@ publishingRouter.get('/auth/dzen/status', async (req, res) => {
     }
   });
 });
+
+// ============ DZEN SCREENSHOTS API ============
+
+// Get list of screenshots
+publishingRouter.get('/dzen/screenshots', async (_req, res) => {
+  const fs = await import('fs');
+  const path = await import('path');
+  
+  const screenshotsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH 
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'dzen-screenshots')
+    : '/tmp/dzen-screenshots';
+  
+  try {
+    if (!fs.existsSync(screenshotsDir)) {
+      return res.json({ screenshots: [], message: 'No screenshots directory' });
+    }
+    
+    const files = fs.readdirSync(screenshotsDir)
+      .filter((f: string) => f.endsWith('.png'))
+      .sort()
+      .reverse()  // newest first
+      .slice(0, 20);  // last 20 screenshots
+    
+    res.json({ 
+      screenshots: files,
+      count: files.length,
+      directory: screenshotsDir
+    });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// Get specific screenshot
+publishingRouter.get('/dzen/screenshots/:filename', async (req, res) => {
+  const fs = await import('fs');
+  const path = await import('path');
+  
+  const screenshotsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH 
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'dzen-screenshots')
+    : '/tmp/dzen-screenshots';
+  
+  const filename = req.params.filename;
+  
+  // Security: prevent path traversal
+  if (filename.includes('..') || filename.includes('/')) {
+    return res.status(400).json({ error: 'Invalid filename' });
+  }
+  
+  const filepath = path.join(screenshotsDir, filename);
+  
+  if (!fs.existsSync(filepath)) {
+    return res.status(404).json({ error: 'Screenshot not found' });
+  }
+  
+  res.setHeader('Content-Type', 'image/png');
+  res.sendFile(filepath);
+});
+
+// Delete all screenshots
+publishingRouter.delete('/dzen/screenshots', async (_req, res) => {
+  const fs = await import('fs');
+  const path = await import('path');
+  
+  const screenshotsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH 
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'dzen-screenshots')
+    : '/tmp/dzen-screenshots';
+  
+  try {
+    if (fs.existsSync(screenshotsDir)) {
+      const files = fs.readdirSync(screenshotsDir);
+      for (const file of files) {
+        fs.unlinkSync(path.join(screenshotsDir, file));
+      }
+    }
+    res.json({ success: true, message: 'All screenshots deleted' });
+  } catch (error: any) {
+    res.status(500).json({ error: error.message });
+  }
+});
