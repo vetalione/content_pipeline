@@ -511,51 +511,58 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
     // Close any modals first
     await closeModals(page);
     
-    // Dzen uses Draft.js - title is in the first editor block
-    const titleSelectors = [
-      '.public-DraftEditor-content .public-DraftStyleDefault-block:first-child',
-      '.public-DraftEditor-content [data-offset-key]:first-child',
-      '.article-editor-desktop--editable-input__editableInput-oN .public-DraftEditor-content',
-      '[class*="editableInput"] .public-DraftEditor-content',
-      '.public-DraftEditor-content'
+    // CRITICAL: Cursor starts on paragraph line by default
+    // Title line is the FIRST .public-DraftStyleDefault-block element
+    // We need to click directly on it (ArrowUp doesn't work)
+    
+    // From user's HTML: title line is first block with class public-DraftStyleDefault-block
+    const titleLineSelectors = [
+      '.public-DraftStyleDefault-block:first-child',
+      '.public-DraftEditor-content > div > div:first-child',
+      '[data-contents="true"] > div:first-child',
+      '.DraftEditor-root .public-DraftStyleDefault-block:first-of-type'
     ];
     
-    for (const selector of titleSelectors) {
-      const titleInput = await page.$(selector);
-      if (titleInput) {
-        await titleInput.click();
+    let titleLineClicked = false;
+    for (const selector of titleLineSelectors) {
+      const titleLine = await page.$(selector);
+      if (titleLine) {
+        console.log(`   ✓ Found title line: ${selector}`);
+        await titleLine.click();
         await page.waitForTimeout(300);
-        
-        // Just type the title - editor starts empty, no need to select
-        await insertText(page, title);
-        await page.waitForTimeout(200);
-        
-        // Move cursor to end to ensure we're ready for next content
-        await page.keyboard.press('End');
-        
-        console.log('✅ Title set');
-        // Move to new line after title
-        await page.keyboard.press('Enter');
-        await page.waitForTimeout(300);
-        return true;
+        titleLineClicked = true;
+        break;
       }
     }
     
-    // Fallback: click on editor area and type
-    const editor = await page.$('[contenteditable="true"]');
-    if (editor) {
-      await editor.click();
-      await page.waitForTimeout(300);
-      
-      // Just type - no Ctrl+A
-      await insertText(page, title);
-      await page.keyboard.press('End');
-      console.log('✅ Title set via fallback');
-      return true;
+    if (!titleLineClicked) {
+      // Fallback: click on editor and try ArrowUp
+      console.log('   ⚠️ Title line not found, trying fallback...');
+      const editor = await page.$('[contenteditable="true"]');
+      if (editor) {
+        await editor.click();
+        await page.waitForTimeout(200);
+        // Try clicking at top of editor
+        await page.keyboard.press('Home');
+        await page.keyboard.down('Control');
+        await page.keyboard.press('Home');
+        await page.keyboard.up('Control');
+        await page.waitForTimeout(200);
+      }
     }
     
-    console.error('❌ Could not find title input');
-    return false;
+    // Now we're on the title line - just type the title
+    // It will automatically be formatted as H1 (title)
+    await insertText(page, title);
+    await page.waitForTimeout(200);
+    
+    console.log('✅ Title set');
+    
+    // Press Enter to move to next line (for cover image)
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(300);
+    
+    return true;
   } catch (error) {
     console.error('❌ Error setting title:', error);
     return false;
@@ -571,13 +578,14 @@ async function addTextBlock(page: Page, text: string): Promise<boolean> {
     // Scroll to editor first
     await focusEditor(page);
     
-    // Press Enter to create new block
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(200);
-    
-    // Use clipboard paste with typing fallback
+    // Note: caller already pressed Enter, we're on new line
+    // Just type the text
     await insertText(page, text);
     await page.waitForTimeout(100);
+    
+    // Press Enter to move to next line
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
     
     return true;
   } catch (error) {
@@ -597,17 +605,15 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
     // CRITICAL: Scroll editor into view first
     await focusEditor(page);
     
-    // Press Enter for new block
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(300);
-    
-    // Type the heading text
+    // Note: caller already pressed Enter, we're on new line
+    // Type the heading text (without pressing Enter first)
     await insertText(page, text);
     await page.waitForTimeout(300);
     
-    // Select all text in current block using Ctrl+A
-    // In Draft.js, Ctrl+A selects the current block content when focus is in a block
-    await page.keyboard.press('Control+a');
+    // Select all text in current line using End then Shift+Home
+    // In Draft.js, End+Shift+Home selects the current line content when focus is in a block
+    await page.keyboard.press('End');
+    await page.keyboard.press('Shift+Home');
     await page.waitForTimeout(500);
     
     // Wait for toolbar to appear (it shows up when text is selected)
@@ -637,6 +643,10 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
     await page.keyboard.press('ArrowRight');
     await page.waitForTimeout(100);
     
+    // Press Enter to move to next line
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
+    
     return true;
   } catch (error) {
     console.error('❌ Error adding heading:', error);
@@ -655,15 +665,14 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
     // CRITICAL: Scroll editor into view first
     await focusEditor(page);
     
-    await page.keyboard.press('Enter');
-    await page.waitForTimeout(300);
-    
+    // Note: caller already pressed Enter, we're on new line
     // Type the quote text
     await insertText(page, text);
     await page.waitForTimeout(300);
     
-    // Select all text in current block using Ctrl+A
-    await page.keyboard.press('Control+a');
+    // Select all text in current line using End then Shift+Home
+    await page.keyboard.press('End');
+    await page.keyboard.press('Shift+Home');
     await page.waitForTimeout(500);
     
     // Wait for toolbar to appear
@@ -688,6 +697,10 @@ async function addBlockquote(page: Page, text: string): Promise<boolean> {
     // CRITICAL: Remove selection BEFORE any further action
     await page.keyboard.press('ArrowRight');
     await page.waitForTimeout(100);
+    
+    // Press Enter to move to next line
+    await page.keyboard.press('Enter');
+    await page.waitForTimeout(200);
     
     return true;
   } catch (error) {
@@ -1014,15 +1027,18 @@ async function addSection(page: Page, section: DzenSection): Promise<boolean> {
   console.log(`📝 Adding section ${section.number}: "${section.heading.substring(0, 40)}..."`);
   
   try {
-    // Add section heading
+    // Add section heading (ends with Enter)
     await addHeading(page, `${section.number}. ${section.heading}`);
     
-    // Add image IMMEDIATELY after heading (per Dzen editor logic)
+    // Add image after heading (heading already pressed Enter)
     if (section.imageUrl) {
       await addImageFromUrl(page, section.imageUrl);
+      // addImageFromUrl doesn't press Enter, do it here
+      await page.keyboard.press('Enter');
+      await page.waitForTimeout(200);
     }
     
-    // Add first paragraph
+    // Add first paragraph (ends with Enter)
     await addTextBlock(page, section.paragraph1);
     
     // Add second paragraph if exists
