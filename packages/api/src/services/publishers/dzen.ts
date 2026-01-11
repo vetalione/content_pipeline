@@ -534,14 +534,17 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
     // Title line is the FIRST .public-DraftStyleDefault-block element
     // We need to click directly on it (ArrowUp doesn't work)
     
-    // From user's HTML: title line is first block with class public-DraftStyleDefault-block
-    // Title line is first block - but we need to click INSIDE it (on span)
-    // Structure: div.public-DraftStyleDefault-block > span > br[data-text="true"]
+    // Take screenshot before attempting title
+    await takeScreenshot(page, 'before-title');
+    
+    // From user: <span data-offset-key="72jdf-0-0"><br data-text="true"></span>
+    // Key: click on span[data-offset-key] inside first block
     const titleLineSelectors = [
-      '.public-DraftStyleDefault-block:first-child span',  // Click on span inside first block
-      '.public-DraftStyleDefault-block:first-child',
+      '.public-DraftStyleDefault-block:first-child span[data-offset-key]',
+      '.public-DraftStyleDefault-block:first-child span',
+      '[data-contents="true"] > div:first-child span[data-offset-key]',
       '[data-contents="true"] > div:first-child span',
-      '[contenteditable="true"] [data-block="true"]:first-child'
+      '.public-DraftStyleDefault-block:first-child',
     ];
     
     let titleLineClicked = false;
