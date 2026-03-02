@@ -289,10 +289,15 @@ export async function batchValidateImages(
   // ── Fetch all thumbnails in parallel ──────────────────────────────────────
   const fetchedImages = await Promise.all(
     batch.map(async (c) => {
-      // Use thumbnail when available — much smaller download
-      const urlToFetch = c.thumbnailUrl ?? c.originalUrl;
-      const imgData = await fetchImageWithRetry(urlToFetch);
-      return imgData; // null on failure
+      // Try thumbnail first (5–30 KB vs 500 KB+).
+      // If thumbnail 429s/fails, fall back to originalUrl — some CDNs rate-limit
+      // their thumbnail endpoint but serve the original fine.
+      const urlsToTry = [c.thumbnailUrl, c.originalUrl].filter((u): u is string => !!u);
+      for (const url of urlsToTry) {
+        const imgData = await fetchImageWithRetry(url);
+        if (imgData) return imgData;
+      }
+      return null; // both failed
     })
   );
 

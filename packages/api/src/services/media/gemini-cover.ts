@@ -235,34 +235,14 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
 - Quality: Sharp, legible text and diagrams, professional finish
 - Aspect ratio: 16:9, resolution: 4K`;
   
-  console.log('🎨 Generating cover with gemini-3-pro-image-preview via REST API...');
-  console.log('📝 Prompt:', prompt);
+  console.log('🎨 Generating cover with Imagen 3 (imagen-3.0-generate-002)...');
+  console.log('📝 Prompt (first 300 chars):', prompt.substring(0, 300));
 
   try {
     const apiKey = process.env.GEMINI_API_KEY;
     if (!apiKey) {
       throw new Error('GEMINI_API_KEY environment variable is not set');
     }
-
-    // Build request body for gemini-3-pro-image-preview with correct format
-    const requestBody: any = {
-      contents: [
-        {
-          parts: [
-            { text: prompt }
-          ]
-        }
-      ],
-      tools: [
-        { googleSearch: {} }
-      ],
-      generationConfig: {
-        imageConfig: {
-          aspectRatio: '16:9',
-          imageSize: '4K'
-        }
-      }
-    };
 
     // Retry logic with increased timeout
     const maxRetries = 3;
@@ -276,16 +256,19 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 120000);
         
-        // Call gemini-3-pro-image-preview REST API for 4K image generation
+        // Imagen 3 — purpose-built image generation API with aspect-ratio support
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3-pro-image-preview:generateContent`,
+          `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict`,
           {
             method: 'POST',
             headers: {
               'x-goog-api-key': apiKey,
               'Content-Type': 'application/json',
             },
-            body: JSON.stringify(requestBody),
+            body: JSON.stringify({
+              instances: [{ prompt }],
+              parameters: { sampleCount: 1, aspectRatio: '16:9' },
+            }),
             signal: controller.signal,
           }
         );
@@ -294,37 +277,24 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
 
         if (!response.ok) {
           const errorData = await response.json() as any;
-          console.error('❌ Gemini 3 Pro Image API Error:', errorData);
-          
-          // Check if it's a rate limit or overload error - retry
-          const errorMessage = JSON.stringify(errorData.error);
+console.error('❌ Imagen API error:', errorData);
+          const errorMessage = JSON.stringify(errorData?.error ?? errorData);
           if (errorMessage.includes('overloaded') || errorMessage.includes('rate') || errorMessage.includes('503') || errorMessage.includes('429')) {
             console.log(`⏳ API overloaded, waiting before retry...`);
-            await new Promise(resolve => setTimeout(resolve, 10000 * attempt)); // 10s, 20s, 30s
+            await new Promise(resolve => setTimeout(resolve, 10000 * attempt));
             lastError = new Error(errorMessage);
             continue;
           }
-          
           throw new Error(errorMessage);
         }
 
         const data = await response.json() as any;
-    
-        // Extract image from response
-        let imageBase64: string | null = null;
-        
-        if (data.candidates && data.candidates[0]?.content?.parts) {
-          for (const part of data.candidates[0].content.parts) {
-            if (part.inlineData?.data) {
-              imageBase64 = part.inlineData.data;
-              break;
-            }
-          }
-        }
+        // Imagen 3 response shape: { predictions: [{ bytesBase64Encoded: '...', mimeType: 'image/jpeg' }] }
+        const imageBase64 = data?.predictions?.[0]?.bytesBase64Encoded as string | undefined;
 
         if (!imageBase64) {
-          console.error('Response structure:', JSON.stringify(data, null, 2).substring(0, 1000));
-          throw new Error('No image in response');
+          console.error('Imagen response structure:', JSON.stringify(data, null, 2).substring(0, 1000));
+          throw new Error('No image in Imagen 3 response');
         }
         
         const storageBase = process.env.STORAGE_PATH || process.cwd();
@@ -346,15 +316,16 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
       } catch (retryError: any) {
         lastError = retryError;
         console.error(`❌ Attempt ${attempt} failed:`, retryError.message);
-        
-        // Check if it's a timeout or network error - retry
-        if (retryError.name === 'AbortError' || retryError.message?.includes('timeout') || retryError.message?.includes('fetch failed')) {
-          console.log(`⏳ Network/timeout error, waiting before retry...`);
-          await new Promise(resolve => setTimeout(resolve, 5000 * attempt)); // 5s, 10s, 15s
+        const isTransient = retryError.name === 'AbortError' ||
+                            retryError.message?.includes('timeout') ||
+                            retryError.message?.includes('fetch failed') ||
+                            retryError.message?.includes('503') ||
+                            retryError.message?.includes('429');
+        if (isTransient && attempt < maxRetries) {
+          console.log(`⏳ Transient error, waiting ${5000 * attempt}ms before retry...`);
+          await new Promise(resolve => setTimeout(resolve, 5000 * attempt));
           continue;
         }
-        
-        // Other errors - don't retry
         break;
       }
     }
@@ -366,7 +337,7 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
       error: lastError?.message || 'Failed to generate cover image after retries',
     };
   } catch (error: any) {
-    console.error('❌ Gemini 3 Pro Image generation error:', error);
+    console.error('❌ Imagen 3 cover generation error:', error);
     return {
       success: false,
       error: error.message || 'Failed to generate cover image',
