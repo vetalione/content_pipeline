@@ -45,13 +45,19 @@ async function fetchImageWithRetry(
   imageUrl: string,
   maxRetries: number = MAX_RETRIES
 ): Promise<{ buffer: ArrayBuffer; mimeType: string } | null> {
+  // Spoof the Referer to the image's own origin — bypasses most hotlink protection
+  let referer = '';
+  try { referer = new URL(imageUrl).origin + '/'; } catch { /* ignore malformed URLs */ }
+
   for (let attempt = 0; attempt <= maxRetries; attempt++) {
     try {
       const response = await fetch(imageUrl, {
         headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+          'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+          ...(referer ? { 'Referer': referer } : {}),
         },
-        signal: AbortSignal.timeout(10000) // 10 second timeout per attempt
+        signal: AbortSignal.timeout(8000),
       });
 
       if (!response.ok) {
@@ -62,10 +68,16 @@ async function fetchImageWithRetry(
         throw new Error(`HTTP ${response.status}`);
       }
 
+      // Validate the response is actually an image — some servers return HTML with 200 OK
+      // (Gemini crashes if it receives HTML instead of image bytes)
+      const contentType = response.headers.get('content-type') || '';
+      if (!contentType.startsWith('image/')) {
+        console.log(`    ⚠️ Skipped non-image response (${contentType}): ${imageUrl.substring(0, 60)}`);
+        return null;
+      }
+
       const buffer = await response.arrayBuffer();
-      const mimeType = response.headers.get('content-type') || 'image/jpeg';
-      
-      return { buffer, mimeType };
+      return { buffer, mimeType: contentType };
     } catch (error: any) {
       const isLastAttempt = attempt === maxRetries;
       
@@ -307,8 +319,15 @@ export async function batchValidateImages(
     .filter((p): p is typeof p & { imgData: NonNullable<typeof p.imgData> } => p.imgData !== null);
 
   if (validPairs.length === 0) {
-    console.log('  ❌ Batch: no images could be fetched');
-    return null;
+    console.log('  ⚠️ Batch: no images could be fetched — returning metadata-best candidate at 50%');
+    // Don't return null — that causes the section to get no image at all.
+    // Return index 0 (batch is pre-sorted by metadata score, so index 0 is best).
+    return {
+      bestIndex: 0,
+      confidence: 50,
+      reasoning: 'Image fetch failed for all candidates; selected by metadata score',
+      scores: batch.map(() => 50),
+    };
   }
 
   try {

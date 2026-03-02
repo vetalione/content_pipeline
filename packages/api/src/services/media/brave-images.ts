@@ -133,26 +133,34 @@ function processResults(data: BraveSearchResponse, personName?: string): ImageCa
   }
   const candidates: ImageCandidate[] = data.results
     .filter(item => {
-      const imageUrl = (item.properties?.url || item.url || '').toLowerCase();
-      if (!imageUrl) return false;
-      // Must be a direct image URL
-      const isImage = imageUrl.endsWith('.jpg') || imageUrl.endsWith('.jpeg') ||
-                      imageUrl.endsWith('.png') || imageUrl.includes('.jpg?') ||
-                      imageUrl.includes('.jpeg?') || imageUrl.includes('.png?');
-      if (!isImage) return false;
+      // properties.url = direct image URL (not always populated by Brave)
+      // thumbnail.src  = Brave CDN proxy — always a real image URL, always accessible
+      const directUrl = item.properties?.url || '';
+      const thumbSrc  = item.thumbnail?.src   || '';
+      const checkUrl  = (directUrl || thumbSrc).toLowerCase();
+      if (!checkUrl) return false;
+
+      // If we have a direct URL, it must look like an image file
+      if (directUrl) {
+        const isImage = /\.(jpg|jpeg|png)(\?|$)/i.test(directUrl);
+        if (!isImage) return false;
+      }
+      // If no directUrl, thumbSrc is a CDN-proxied image — always valid
+
       // Exclude stock photo sites
-      const isStock = STOCK_DOMAINS.some(d => imageUrl.includes(d) || (item.source ?? '').toLowerCase().includes(d));
+      const isStock = STOCK_DOMAINS.some(d => checkUrl.includes(d) || (item.source ?? '').toLowerCase().includes(d));
       if (isStock) return false;
-      // Minimum size
-      const w = item.properties?.width ?? 0;
+
+      // Minimum size filter (only when Brave reports dimensions)
+      const w = item.properties?.width  ?? 0;
       const h = item.properties?.height ?? 0;
       return w >= 400 || h >= 300 || (w === 0 && h === 0);
     })
     .map(item => {
-      const originalUrl = item.properties?.url || item.url;
+      // Prefer direct image URL; fall back to CDN thumbnail as the display URL
+      const originalUrl = item.properties?.url || item.thumbnail?.src || item.url;
       const candidate: ImageCandidate = {
         originalUrl,
-        // Brave's thumbnail.src is their CDN-proxied small preview (~10–30 KB)
         thumbnailUrl: item.thumbnail?.src,
         title: item.title,
         sourceUrl: item.page_fetched || undefined,

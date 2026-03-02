@@ -938,9 +938,16 @@ async function downloadAndCacheImage(
 ): Promise<string> {
   // Resolve Wikimedia Commons page URLs to actual image URLs before attempting download
   const resolvedOriginal = await resolveWikimediaPageUrl(originalUrl);
-  const urlsToTry = [resolvedOriginal, thumbnailUrl].filter((u): u is string => !!u);
 
-  for (const url of urlsToTry) {
+  // Try thumbnailUrl FIRST: it's served from CDN (Brave/Wikimedia/Google),
+  // has no hotlink protection, and is always accessible.
+  // originalUrl is on the source website and often blocks foreign Referers.
+  // We do want the original for quality, so we try it SECOND.
+  const urlsToTry = [thumbnailUrl, resolvedOriginal].filter((u): u is string => !!u);
+  // De-duplicate: if thumbnail === original (can happen for Wikimedia)
+  const uniqueUrls = [...new Set(urlsToTry)];
+
+  for (const url of uniqueUrls) {
     try {
       // Build a Referer that matches the image's own domain — many CDNs/sites
       // allow hotlinking only from their own domain; spoofing it satisfies that check.
