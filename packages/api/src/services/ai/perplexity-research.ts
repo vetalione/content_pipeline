@@ -66,8 +66,10 @@ export async function performPerplexityResearch(
     return refusalPhrases.some(p => lower.startsWith(p) || lower.includes('\n' + p));
   }
 
-  // Detect thin response: parsed JSON has fewer than MIN_FACTS facts
-  const MIN_FACTS = 5;
+  // Detect thin response: parsed JSON has fewer than MIN_FACTS facts.
+  // We need 10-12 for the generator to have enough material to pick from.
+  // 8 is the minimum acceptable — below this we retry with a different framing.
+  const MIN_FACTS = 8;
   function isThinResponse(rawData: any): boolean {
     const count = rawData?.failures?.length ?? rawData?.facts?.length ?? 0;
     return count < MIN_FACTS;
@@ -396,37 +398,64 @@ function createDeepResearchPrompt(celebrityName: string, framing: PromptFraming 
 
   return `${framingContext[framing]}
 
-Research the life of ${celebrityName} and compile 10–12 specific, chronological biography facts
-about documented challenges, setbacks, and the path to success.
+Research the COMPLETE life of ${celebrityName} and compile EXACTLY 10–12 specific, chronological biography facts.
 
-CHRONOLOGICAL STRUCTURE (strictly childhood to present):
-1. Childhood & family background (ages 5–15): poverty, family hardship, early formative events
-2. School years & first attempts (ages 15–20): early passion, first failures, social difficulties
-3. Rejections & the struggle years (ages 20–30): specific rejections (who, when), financial hardship, early career failures
-4. Career crises & public setbacks (ages 30+): bankruptcies, scandals, professional failures, personal crises
-5. The turning point and breakthrough: what changed, how success came, key numbers
+CRITICAL REQUIREMENT — YOU MUST COVER ALL 6 PHASES BELOW.
+Do not stop after early career. Each phase must contribute at least 1–2 facts.
+If you run out of dramatic facts in one phase, move to the next — do not repeat or pad.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 1 — CHILDHOOD & FAMILY (ages 5–15)  [1–2 facts required]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Look for: poverty, parents' jobs and financial struggles, housing (moves, evictions),
+school bullying or social isolation, absent/troubled parent, traumatic family event.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 2 — SCHOOL & FIRST ATTEMPTS (ages 15–22)  [1–2 facts required]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Look for: dropped out / expelled, first public failure or humiliation, early jobs
+(janitor, factory, delivery), first audition/attempt and what happened.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 3 — THE STRUGGLE YEARS (ages 22–30)  [2–3 facts required]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Look for: specific rejections with names (who rejected, how many times, exact response),
+cash amounts of debt or lowest bank balance, specific failed projects,
+where they lived (car, couch-surfing, cheap motel), who believed in them vs who didn't.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 4 — PERSONAL LIFE CRISES (any age)  [1–2 facts required]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Look for: divorces / breakups with public fallout, custody battles, estranged children,
+depression / mental health crises, addictions (drugs, alcohol, gambling), health scares,
+death of someone close and its impact on their career.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 5 — MID/LATE CAREER SETBACKS (ages 30+)  [1–2 facts required]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Look for: critically panned projects (box office numbers, review scores),
+fired from major role or project, public scandal or backlash, financial crisis
+despite being famous, legal trouble, feud with studio/label/partner.
+
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+PHASE 6 — TURNING POINT & BREAKTHROUGH  [1 fact required]
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+Look for: the specific moment / person / decision that changed everything.
+Not vague — name the film/record/book, the year, the person who said yes.
 
 EACH FACT MUST INCLUDE:
-- Exact age AND/OR year of the event
-- Specific figures: dollar amounts, durations (X months/years), quantities (X rejections)
-- Named people, companies, or places involved
-- The subject's own words (if a quote from an interview or book is available)
-- Source: publication name + approximate date (e.g. "Rolling Stone, 1993", "autobiography 'Born Standing Up', 2007")
+- Exact age AND/OR year
+- Specific figures: dollar amounts, durations, quantities
+- Named people, companies, or places
+- A direct quote from the subject if available (from published interview or book)
+- Source: publication + approximate date
 
-PARTICULARLY VALUABLE (search for these specifically):
-★ Childhood poverty details: family income, housing, what the parents did for work
-★ The specific number of rejections before the first break
-★ Exact amounts of debt, bankruptcy figures, financial low points
-★ Direct quotes where the subject talks about their past struggles
-★ The name of the person who gave them their first real chance
-★ A specific humiliating or dramatic moment that shows the contrast with later success
-
-VISUAL DESCRIPTIONS (for each fact, describe the type of photo that would illustrate it):
+VISUAL DESCRIPTIONS — for each fact:
 - Must describe a photo WHERE ${celebrityName} IS VISIBLE
-- Be specific about era/context: "photo of ${celebrityName} age ~[X] during [specific context]"
+- Be specific: "photo of ${celebrityName} age ~[X] during [specific context]"
 - NOT abstract: not "a street in New York" but "${celebrityName} on that street in [year]"
 
-OUTPUT — respond with ONLY the following JSON structure, nothing else:
+OUTPUT — respond with ONLY valid JSON, nothing before or after:
 
 {
   "teaser": {
