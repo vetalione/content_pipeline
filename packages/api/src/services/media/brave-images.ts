@@ -10,13 +10,29 @@
 
 import { type ImageCandidate, scoreByMetadata } from './google-images';
 
-// Free plan rate limit: 1 request/second. Throttle all calls globally.
+// Free plan rate limit: 1 request/second.
+// Throttle all calls with a promise-queue mutex so concurrent EN + RU calls
+// are serialized even though they start in the same synchronous tick.
+let _braveQueue: Promise<void> = Promise.resolve();
 let _lastBraveCallTime = 0;
 const BRAVE_MIN_INTERVAL_MS = 1200;
+
 async function braveThrottle(): Promise<void> {
-  const wait = BRAVE_MIN_INTERVAL_MS - (Date.now() - _lastBraveCallTime);
-  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  // Chain onto the previous caller's slot so calls are strictly sequential.
+  // Reading + writing _braveQueue happens synchronously before any await,
+  // which is critical when multiple callers start in the same tick.
+  const prev = _braveQueue;
+  let releaseNext!: () => void;
+  _braveQueue = new Promise<void>(r => { releaseNext = r; });
+
+  await prev; // wait for previous slot to finish
+
+  const elapsed = Date.now() - _lastBraveCallTime;
+  if (elapsed < BRAVE_MIN_INTERVAL_MS) {
+    await new Promise(r => setTimeout(r, BRAVE_MIN_INTERVAL_MS - elapsed));
+  }
   _lastBraveCallTime = Date.now();
+  releaseNext(); // let next queued caller proceed
 }
 
 interface BraveImageResult {

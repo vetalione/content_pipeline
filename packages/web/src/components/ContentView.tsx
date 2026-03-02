@@ -21,6 +21,7 @@ interface SectionImageProgress {
 }
 
 export default function ContentView({ content, researchData, articleId, onUpdate }: Props) {
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
   const [searchingImageIds, setSearchingImageIds] = useState<Set<number>>(new Set());
   const [imageProgress, setImageProgress] = useState<SectionImageProgress | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -174,7 +175,7 @@ export default function ContentView({ content, researchData, articleId, onUpdate
             {section.imageUrl ? (
               <div className="my-4 rounded-lg overflow-hidden relative group bg-gray-100">
                 <img 
-                  src={section.imageUrl} 
+                  src={section.imageUrl.startsWith('/') ? `${API_URL}${section.imageUrl}` : section.imageUrl} 
                   alt={section.visualSuggestion || section.heading || section.title}
                   className="w-full max-h-96 object-contain rounded-lg"
                   onError={(e) => {
