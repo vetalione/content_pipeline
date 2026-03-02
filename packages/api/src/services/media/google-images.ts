@@ -942,13 +942,17 @@ async function downloadAndCacheImage(
 
   for (const url of urlsToTry) {
     try {
+      // Build a Referer that matches the image's own domain — many CDNs/sites
+      // allow hotlinking only from their own domain; spoofing it satisfies that check.
+      let referer = '';
+      try { referer = new URL(url).origin + '/'; } catch { /* ignore malformed URLs */ }
+
       const response = await fetch(url, {
         signal: AbortSignal.timeout(10000),
         headers: {
-          // Mimic a regular browser request — satisfies most hotlink checks
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
           'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
-          // No Referer intentionally — avoids triggering domain-specific hotlink blocks
+          ...(referer ? { 'Referer': referer } : {}),
         },
       });
 

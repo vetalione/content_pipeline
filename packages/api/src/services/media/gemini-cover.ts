@@ -235,7 +235,7 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
 - Quality: Sharp, legible text and diagrams, professional finish
 - Aspect ratio: 16:9, resolution: 4K`;
   
-  console.log('🎨 Generating cover with Imagen 3 (imagen-3.0-generate-002)...');
+  console.log('🎨 Generating cover with Imagen 4 (imagen-4.0-generate-001)...');
   console.log('📝 Prompt (first 300 chars):', prompt.substring(0, 300));
 
   try {
@@ -256,9 +256,9 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
         const controller = new AbortController();
         const timeoutId = setTimeout(() => controller.abort(), 120000);
         
-        // Imagen 3 — purpose-built image generation API with aspect-ratio support
+        // Imagen 4 — purpose-built image generation API with aspect-ratio support
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/imagen-3.0-generate-002:predict`,
+          `https://generativelanguage.googleapis.com/v1beta/models/imagen-4.0-generate-001:predict`,
           {
             method: 'POST',
             headers: {
@@ -279,8 +279,13 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
           const errorData = await response.json() as any;
 console.error('❌ Imagen API error:', errorData);
           const errorMessage = JSON.stringify(errorData?.error ?? errorData);
-          if (errorMessage.includes('overloaded') || errorMessage.includes('rate') || errorMessage.includes('503') || errorMessage.includes('429')) {
-            console.log(`⏳ API overloaded, waiting before retry...`);
+          const httpCode = errorData?.error?.code ?? response.status;
+          // Retry only on genuine overload / rate-limit, NOT on 404 (wrong model name)
+          const isRetryable = httpCode === 429 || httpCode === 503 ||
+            errorMessage.includes('overloaded') || errorMessage.includes('RESOURCE_EXHAUSTED') ||
+            errorMessage.includes('UNAVAILABLE');
+          if (isRetryable) {
+            console.log(`⏳ API overloaded/rate-limited (${httpCode}), waiting before retry...`);
             await new Promise(resolve => setTimeout(resolve, 10000 * attempt));
             lastError = new Error(errorMessage);
             continue;
@@ -301,7 +306,10 @@ console.error('❌ Imagen API error:', errorData);
         const coversDir = path.join(storageBase, 'covers');
         await fs.mkdir(coversDir, { recursive: true });
         
-        const fileName = `cover_${Date.now()}.jpg`;
+        // Imagen 4 returns image/png; save with the correct extension
+        const predMime = data?.predictions?.[0]?.mimeType ?? 'image/jpeg';
+        const ext = predMime.includes('png') ? 'png' : 'jpg';
+        const fileName = `cover_${Date.now()}.${ext}`;
         const filePath = path.join(coversDir, fileName);
         
         await fs.writeFile(filePath, Buffer.from(imageBase64, 'base64'));
