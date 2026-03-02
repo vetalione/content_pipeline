@@ -289,7 +289,9 @@ async function loadContext(browser: Browser): Promise<BrowserContext> {
     return await browser.newContext({ 
       storageState: DZEN_STATE_FILE,
       viewport: { width: 1280, height: 900 },
-      permissions: ['clipboard-read', 'clipboard-write']
+      permissions: ['clipboard-read', 'clipboard-write'],
+      // Stealth: real browser UA to avoid bot detection
+      userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/132.0.0.0 Safari/537.36',
     });
   }
   
@@ -1359,7 +1361,13 @@ export async function publishToDzen(
   
   const browser = await chromium.launch({ 
     headless: true,  // Always headless for automation
-    slowMo: isServer ? 50 : 100  // Faster on server
+    slowMo: isServer ? 50 : 100,  // Faster on server
+    // Stealth: disable automation detection flags (from browser-ops skill)
+    args: [
+      '--disable-blink-features=AutomationControlled',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+    ],
   });
   
   try {
