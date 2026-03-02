@@ -15,7 +15,7 @@ import { type ImageCandidate, scoreByMetadata } from './google-images';
 // are serialized even though they start in the same synchronous tick.
 let _braveQueue: Promise<void> = Promise.resolve();
 let _lastBraveCallTime = 0;
-const BRAVE_MIN_INTERVAL_MS = 1200;
+const BRAVE_MIN_INTERVAL_MS = 2000;
 
 async function braveThrottle(): Promise<void> {
   // Chain onto the previous caller's slot so calls are strictly sequential.
@@ -100,54 +100,71 @@ export async function searchBraveImages(
 
     if (!response.ok) {
       const errorText = await response.text();
+      // On 429: wait 3 s and retry once — saves callers from getting empty results
+      // on a single window-boundary collision
+      if (response.status === 429) {
+        console.warn(`⚠️ Brave 429, retrying after 3 s...`);
+        await new Promise(r => setTimeout(r, 3000));
+        // One single retry (no infinite loop)
+        const retry = await fetch(url.toString(), {
+          headers: { Accept: 'application/json', 'X-Subscription-Token': apiKey },
+        });
+        if (!retry.ok) {
+          console.error(`Brave Search API error: ${retry.status} - ${await retry.text()}`);
+          return [];
+        }
+        return processResults(await retry.json() as BraveSearchResponse, personName);
+      }
       console.error(`Brave Search API error: ${response.status} - ${errorText}`);
       return [];
     }
 
-    const data = await response.json() as BraveSearchResponse;
-
-    if (!data.results || data.results.length === 0) {
-      console.log(`No Brave images found for: "${query}"`);
-      return [];
-    }
-
-    const candidates: ImageCandidate[] = data.results
-      .filter(item => {
-        const imageUrl = (item.properties?.url || item.url || '').toLowerCase();
-        if (!imageUrl) return false;
-        // Must be a direct image URL
-        const isImage = imageUrl.endsWith('.jpg') || imageUrl.endsWith('.jpeg') ||
-                        imageUrl.endsWith('.png') || imageUrl.includes('.jpg?') ||
-                        imageUrl.includes('.jpeg?') || imageUrl.includes('.png?');
-        if (!isImage) return false;
-        // Exclude stock photo sites
-        const isStock = STOCK_DOMAINS.some(d => imageUrl.includes(d) || (item.source ?? '').toLowerCase().includes(d));
-        if (isStock) return false;
-        // Minimum size
-        const w = item.properties?.width ?? 0;
-        const h = item.properties?.height ?? 0;
-        return w >= 400 || h >= 300 || (w === 0 && h === 0);
-      })
-      .map(item => {
-        const originalUrl = item.properties?.url || item.url;
-        const candidate: ImageCandidate = {
-          originalUrl,
-          // Brave's thumbnail.src is their CDN-proxied small preview (~10–30 KB)
-          thumbnailUrl: item.thumbnail?.src,
-          title: item.title,
-          sourceUrl: item.page_fetched || undefined,
-          source: 'brave',
-          metadataScore: 0,
-        };
-        candidate.metadataScore = scoreByMetadata(candidate, personName ?? '');
-        return candidate;
-      });
-
-    console.log(`✅ Brave found ${candidates.length} valid candidates for: "${query}"`);
-    return candidates;
+    return processResults(await response.json() as BraveSearchResponse, personName);
 
   } catch (error) {
     console.error('Brave Image Search error:', error);
     return [];
   }
+}
+
+function processResults(data: BraveSearchResponse, personName?: string): ImageCandidate[] {
+  if (!data.results || data.results.length === 0) {
+    return [];
+  }
+  const candidates: ImageCandidate[] = data.results
+    .filter(item => {
+      const imageUrl = (item.properties?.url || item.url || '').toLowerCase();
+      if (!imageUrl) return false;
+      // Must be a direct image URL
+      const isImage = imageUrl.endsWith('.jpg') || imageUrl.endsWith('.jpeg') ||
+                      imageUrl.endsWith('.png') || imageUrl.includes('.jpg?') ||
+                      imageUrl.includes('.jpeg?') || imageUrl.includes('.png?');
+      if (!isImage) return false;
+      // Exclude stock photo sites
+      const isStock = STOCK_DOMAINS.some(d => imageUrl.includes(d) || (item.source ?? '').toLowerCase().includes(d));
+      if (isStock) return false;
+      // Minimum size
+      const w = item.properties?.width ?? 0;
+      const h = item.properties?.height ?? 0;
+      return w >= 400 || h >= 300 || (w === 0 && h === 0);
+    })
+    .map(item => {
+      const originalUrl = item.properties?.url || item.url;
+      const candidate: ImageCandidate = {
+        originalUrl,
+        // Brave's thumbnail.src is their CDN-proxied small preview (~10–30 KB)
+        thumbnailUrl: item.thumbnail?.src,
+        title: item.title,
+        sourceUrl: item.page_fetched || undefined,
+        source: 'brave',
+        metadataScore: 0,
+      };
+      candidate.metadataScore = scoreByMetadata(candidate, personName ?? '');
+      return candidate;
+    });
+
+  if (candidates.length > 0) {
+    console.log(`✅ Brave found ${candidates.length} valid candidates`);
+  }
+  return candidates;
 }

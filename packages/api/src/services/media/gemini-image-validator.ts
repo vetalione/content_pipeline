@@ -55,7 +55,7 @@ async function fetchImageWithRetry(
       });
 
       if (!response.ok) {
-        if (response.status === 403 || response.status === 404) {
+        if (response.status === 403 || response.status === 404 || response.status === 429) {
           // Don't retry client errors
           return null;
         }
