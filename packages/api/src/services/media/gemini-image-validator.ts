@@ -349,11 +349,27 @@ OUTPUT ONLY valid JSON (no markdown):
       parts.push({ inlineData: { data: Buffer.from(imgData.buffer).toString('base64'), mimeType: imgData.mimeType } });
     }
 
-    const result = await genAI.models.generateContent({
-      model: 'gemini-3-flash-preview',
-      contents: [{ role: 'user', parts }]
-    });
-    const responseText = result.text ?? '';
+    // Retry up to 3 times for transient Gemini errors (503 service unavailable, 429 rate limit)
+    let lastError: any;
+    let responseText = '';
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        const result = await genAI.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: [{ role: 'user', parts }]
+        });
+        responseText = result.text ?? '';
+        break; // success
+      } catch (e: any) {
+        lastError = e;
+        const msg = String(e?.message ?? e);
+        const isTransient = msg.includes('503') || msg.includes('UNAVAILABLE') || msg.includes('429') || msg.includes('RESOURCE_EXHAUSTED');
+        if (!isTransient || attempt === 2) throw e;
+        const delay = 2000 * (attempt + 1);
+        console.log(`  🔄 Gemini transient error (${msg.substring(0, 60)}), retrying in ${delay}ms...`);
+        await sleep(delay);
+      }
+    };
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON in response');
 

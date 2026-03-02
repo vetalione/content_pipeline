@@ -32,6 +32,7 @@ interface ImageSearchProgress {
 }
 
 export default function ResearchView({ data, articleId, onUpdate }: Props) {
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
   const [facts, setFacts] = useState(data.facts || []);
   const [quotes, setQuotes] = useState(data.quotes || []);
   const [editingFactId, setEditingFactId] = useState<string | null>(null);
@@ -602,7 +603,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
                 <div className="my-3">
                   <div className="bg-gray-100 rounded-md overflow-hidden">
                     <img 
-                      src={fact.imageUrl} 
+                      src={fact.imageUrl.startsWith('/') ? `${API_URL}${fact.imageUrl}` : fact.imageUrl} 
                       alt={fact.visualSuggestion || fact.title}
                       className="w-full max-h-96 object-contain rounded-md"
                       onError={(e) => {

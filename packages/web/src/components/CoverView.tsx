@@ -29,6 +29,7 @@ interface Props {
 }
 
 export default function CoverView({ articleId, celebrityName, coverImages = [], onCoverGenerated }: Props) {
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
   const [loading, setLoading] = useState(false);
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [options, setOptions] = useState<CoverOptions | null>(null);
@@ -172,7 +173,7 @@ export default function CoverView({ articleId, celebrityName, coverImages = [], 
                 }`}
               >
                 <img 
-                  src={cover.originalImageUrl} 
+                  src={cover.originalImageUrl.startsWith('/') ? `${API_URL}${cover.originalImageUrl}` : cover.originalImageUrl} 
                   alt={`${celebrityName} v${cover.version}`}
                   className="w-full h-auto"
                 />

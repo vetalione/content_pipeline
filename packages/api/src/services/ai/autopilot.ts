@@ -145,6 +145,12 @@ export async function runAutopilot(
               }
             });
           }
+
+          // Brief pause between sections so Brave rate-limit queue has room to breathe
+          // (Brave Free = 1 req/sec; each section fires 2 Brave calls via the throttle queue)
+          if (i < sections.length - 1) {
+            await new Promise(r => setTimeout(r, 3000));
+          }
         } catch (imgError) {
           console.error(`Failed to find image for section ${i + 1}:`, imgError);
           // Continue with other sections
