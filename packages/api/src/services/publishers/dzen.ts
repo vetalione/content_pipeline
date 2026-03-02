@@ -102,43 +102,41 @@ async function typeText(page: Page, text: string): Promise<void> {
 }
 
 /**
- * Paste text using clipboard API
- * With proper permissions this should work in headless mode
+ * Paste text using clipboard API.
+ * Uses page.evaluate with proper argument passing — no template literal escaping issues.
+ * Context must have 'clipboard-write' permission (set in loadContext).
  */
 async function clipboardPaste(page: Page, text: string): Promise<boolean> {
+  // Method 1: navigator.clipboard API — works in Chromium headless with permission
   try {
-    // Method 1: Use execCommand via evaluate
-    // The function runs in browser context where document/window exist
-    await page.evaluate(`
-      (function(t) {
-        const textarea = document.createElement('textarea');
-        textarea.value = t;
-        textarea.style.position = 'fixed';
-        textarea.style.left = '-9999px';
-        document.body.appendChild(textarea);
-        textarea.select();
-        document.execCommand('copy');
-        document.body.removeChild(textarea);
-      })(\`${text.replace(/`/g, '\\`').replace(/\\/g, '\\\\')}\`)
-    `);
-    
+    await page.evaluate((t: string) => (window as any).navigator.clipboard.writeText(t), text);
     await page.keyboard.press('Control+v');
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(150);
     return true;
-  } catch (e) {
-    console.log('⚠️ Clipboard method 1 failed, trying method 2...');
+  } catch {
+    console.log('⚠️ navigator.clipboard failed, trying execCommand fallback...');
   }
-  
+
+  // Method 2: hidden textarea + execCommand (legacy fallback)
   try {
-    // Method 2: Use clipboard API directly
-    await page.evaluate(`navigator.clipboard.writeText(\`${text.replace(/`/g, '\\`').replace(/\\/g, '\\\\')}\`)`);
+    await page.evaluate((t: string) => {
+      const w = window as any;
+      const el = w.document.createElement('textarea');
+      el.value = t;
+      el.style.position = 'fixed';
+      el.style.left = '-9999px';
+      w.document.body.appendChild(el);
+      el.select();
+      w.document.execCommand('copy');
+      w.document.body.removeChild(el);
+    }, text);
     await page.keyboard.press('Control+v');
-    await page.waitForTimeout(100);
+    await page.waitForTimeout(150);
     return true;
-  } catch (e) {
-    console.log('⚠️ Clipboard method 2 failed, falling back to typing');
+  } catch {
+    console.log('⚠️ Clipboard paste failed entirely, falling back to keyboard.type()');
   }
-  
+
   return false;
 }
 
@@ -225,6 +223,45 @@ async function closeModals(page: Page): Promise<void> {
     console.log('   ⚠️ Error closing modals:', e);
   }
 }
+
+/**
+ * Try to click the first visible element from a list of selectors.
+ * Uses locator() API which has built-in retry — more reliable than $() + null check.
+ */
+async function tryClick(page: Page, selectors: string[], label: string, timeout = 4000): Promise<boolean> {
+  for (const sel of selectors) {
+    try {
+      const loc = page.locator(sel).first();
+      await loc.waitFor({ state: 'visible', timeout });
+      await loc.click();
+      console.log(`   ✓ Clicked ${label}: ${sel}`);
+      return true;
+    } catch { /* try next selector */ }
+  }
+  console.log(`   ⚠ ${label} not found (tried ${selectors.length} selectors)`);
+  return false;
+}
+
+/**
+ * Wait for an input to appear, click it, then fill it using insertText.
+ * Uses locator() API with built-in retry.
+ */
+async function tryFill(page: Page, selectors: string[], text: string, label: string, timeout = 4000): Promise<boolean> {
+  for (const sel of selectors) {
+    try {
+      const loc = page.locator(sel).first();
+      await loc.waitFor({ state: 'visible', timeout });
+      await loc.click();
+      await page.waitForTimeout(150);
+      await insertText(page, text);
+      console.log(`   ✓ Filled ${label}: ${sel}`);
+      return true;
+    } catch { /* try next selector */ }
+  }
+  console.log(`   ⚠ ${label} input not found`);
+  return false;
+}
+
 /**
  * Load saved browser context with cookies
  */
@@ -334,10 +371,41 @@ async function isLoggedIn(page: Page): Promise<boolean> {
  */
 async function navigateToEditor(page: Page): Promise<boolean> {
   console.log('📝 Navigating to Dzen editor...');
-  
+
+  // ── Strategy 1: direct URL — fastest, most reliable ──────────────────────
+  // Avoids the fragile 3-level menu navigation (profile → create → write article).
+  // If session is valid, this lands straight in the editor.
+  for (const directUrl of [
+    'https://dzen.ru/profile/editor/new',
+    'https://dzen.ru/editor/new',
+  ]) {
+    try {
+      console.log(`   Trying direct editor URL: ${directUrl}`);
+      await page.goto(directUrl, { waitUntil: 'load', timeout: NAVIGATION_TIMEOUT });
+      await page.waitForTimeout(2000);
+      const afterGoto = page.url();
+      // If redirected to login page — session is expired, no point trying more URLs
+      if (afterGoto.includes('passport') || afterGoto.includes('login')) {
+        console.log('   ⚠ Redirected to login — session expired');
+        break;
+      }
+      const editor = await page.$('.public-DraftEditor-content, [contenteditable="true"]');
+      if (editor) {
+        console.log('✅ Editor found via direct URL');
+        await page.waitForTimeout(1000);
+        await closeModals(page);
+        return true;
+      }
+      console.log(`   No editor at: ${afterGoto}`);
+    } catch (e: any) {
+      console.log(`   Direct URL failed: ${e.message?.substring(0, 60)}`);
+    }
+  }
+
+  // ── Strategy 2: menu navigation fallback ─────────────────────────────────
   try {
     // Step 1: Go to main page
-    console.log('   Step 1: Going to dzen.ru...');
+    console.log('   Step 1: Going to dzen.ru (menu navigation)...');
     await page.goto('https://dzen.ru', { 
       waitUntil: 'networkidle',
       timeout: NAVIGATION_TIMEOUT 
@@ -608,10 +676,6 @@ async function setTitle(page: Page, title: string): Promise<boolean> {
     const blocksAfterTitle = await page.$$eval('.public-DraftStyleDefault-block', els => els.length);
     console.log('   Blocks after title: ' + blocksAfterTitle);
     await takeScreenshot(page, 'after-title');
-    
-    // Take screenshot to verify
-    await takeScreenshot(page, 'after-title');
-    
     console.log('✅ Title set');
     
     // Press Enter to move to next line (for cover image)
@@ -694,8 +758,6 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
     } catch {
       console.log('   ⚠️ Toolbar not visible, trying anyway...');
       await takeScreenshot(page, 'toolbar-not-visible');
-      await takeScreenshot(page, 'toolbar-not-visible');
-      await takeScreenshot(page, 'toolbar-not-visible');
     }
     
     // Click H2 or H3 button in toolbar
@@ -710,7 +772,6 @@ async function addHeading(page: Page, text: string, level: 2 | 3 = 2): Promise<b
       console.log(`   ✅ Applied H${level} formatting`);
     } else {
       console.log(`   ⚠️ H${level} button not found, text added as paragraph`);
-      await takeScreenshot(page, 'heading-btn-missing');
       await takeScreenshot(page, 'heading-btn-missing');
     }
     
@@ -869,25 +930,18 @@ async function addImageFromUrl(page: Page, imageUrl: string): Promise<boolean> {
       'button[class*="side-button"]'
     ];
     
-    let clicked = false;
-    for (const selector of imageButtonSelectors) {
-      try {
-        const imageBtn = await page.$(selector);
-        if (imageBtn) {
-          console.log(`   ✓ Found image button: ${selector}`);
-          // Scroll into view and click
-          await imageBtn.scrollIntoViewIfNeeded();
-          await page.waitForTimeout(200);
-          await imageBtn.click({ force: true });
-          await page.waitForTimeout(1000);
-          clicked = true;
-          break;
-        }
-      } catch (e) {
-        console.log(`   ⚠️ Could not click ${selector}`);
-      }
+    // Side button only appears when cursor is on an empty line — wait for it
+    let clicked = await tryClick(page, imageButtonSelectors, 'image side button', 4000);
+
+    if (!clicked) {
+      // Retry: make sure cursor is at end of an empty line, then wait again
+      console.log('   Retrying: repositioning cursor to empty line...');
+      await focusEditor(page);
+      await page.keyboard.press('End');
+      await page.waitForTimeout(600);
+      clicked = await tryClick(page, imageButtonSelectors, 'image side button (retry)', 3000);
     }
-    
+
     if (!clicked) {
       console.log('⚠️ Image button not found or not clickable');
     }
@@ -1061,13 +1115,20 @@ async function addImageFromUrlNoPressEnter(page: Page, imageUrl: string): Promis
     await focusEditor(page);
     
     // DON'T press Enter - cursor is already on new line from setTitle
-    
-    const imageBtn = await page.$('[data-tip="Вставить изображение"]');
+    // Wait for the side button to appear (only visible when cursor is on empty line)
+    let imageBtn: any = null;
+    try {
+      await page.waitForSelector('[data-tip="Вставить изображение"]', { state: 'visible', timeout: 5000 });
+      imageBtn = await page.$('[data-tip="Вставить изображение"]');
+    } catch {
+      console.log('⚠️ Image button not found within timeout');
+      return false;
+    }
     if (!imageBtn) {
       console.log('⚠️ Image button not found');
       return false;
     }
-    
+
     await imageBtn.scrollIntoViewIfNeeded();
     await imageBtn.click({ force: true });
     await page.waitForTimeout(1000);
@@ -1226,13 +1287,10 @@ async function clickPublish(page: Page, options: DzenPublishOptions = {}): Promi
       }
     }
     
-    // Wait for navigation
+    // Wait for page to settle after publish click
     try {
-      await page.waitForNavigation({ 
-        waitUntil: 'networkidle',
-        timeout: 30000 
-      });
-    } catch {}
+      await page.waitForLoadState('networkidle', { timeout: 30000 });
+    } catch { /* timeout is acceptable — check URL below */ }
     
     // Get the published URL
     const url = page.url();
@@ -1371,9 +1429,6 @@ export async function publishToDzen(
       // Now press Enter to move to next line
       await page.keyboard.press('Enter');
       await page.waitForTimeout(300);
-      // Take screenshot to verify cover and cursor
-      await takeScreenshot(page, 'after-cover');
-      // Take screenshot to verify cover and cursor
       await takeScreenshot(page, 'after-cover');
       console.log('   Cover uploaded, cursor restored');
     }
