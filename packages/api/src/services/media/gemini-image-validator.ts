@@ -91,7 +91,7 @@ export async function validateImageRelevance(
   celebrityName: string,
   description: string
 ): Promise<ImageValidationResult> {
-  const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;  // same key used by gemini-cover.ts
   
   if (!apiKey) {
     return {
@@ -278,7 +278,7 @@ export async function batchValidateImages(
 ): Promise<BatchValidationResult | null> {
   if (candidates.length === 0) return null;
 
-  const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+  const apiKey = process.env.GEMINI_API_KEY;  // same key used by gemini-cover.ts
   if (!apiKey) {
     // Fallback: return first candidate at 50% confidence so pipeline doesn't break
     return { bestIndex: 0, confidence: 50, reasoning: 'API key not configured', scores: candidates.map(() => 50) };
