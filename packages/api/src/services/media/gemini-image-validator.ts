@@ -1,10 +1,19 @@
 /**
  * Gemini Vision API for validating image relevance
- * Checks if image matches the description and shows the correct person
- * 
- * Optimizations:
+ *
+ * TWO MODES:
+ *
+ * 1. batchValidateImages() — NEW, preferred
+ *    Sends up to BATCH_SIZE thumbnail images in ONE Gemini request.
+ *    • Uses thumbnailUrl when available (5–30 KB) instead of originalUrl (500 KB–5 MB)
+ *    • One Gemini call per batch of 4 → ~4× fewer API calls
+ *    Combined with thumbnails: ~30× lower cost + bandwidth than the old approach.
+ *
+ * 2. findBestImage() — legacy, kept for backward compatibility / fallback
+ *    Validates images one by one; still uses thumbnailUrl when present.
+ *
+ * Optimizations shared by both:
  * - Retry with exponential backoff for failed fetches
- * - Limited parallelism (max 3 concurrent validations)
  * - Early exit when high-confidence match found
  */
 
@@ -225,6 +234,148 @@ async function processWithConcurrency<T, R>(
   await Promise.all(workers);
   
   return { results, earlyExitResult };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Batch validation (NEW — preferred path)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BATCH_SIZE = 4; // images per Gemini request
+
+export interface BatchValidationResult {
+  /** 0-based index into the input candidates array */
+  bestIndex: number;
+  confidence: number;   // 0–100
+  reasoning: string;
+  /** per-image scores, same order as input */
+  scores: number[];
+}
+
+/**
+ * Validate up to BATCH_SIZE image candidates in a SINGLE Gemini request.
+ *
+ * BANDWIDTH STRATEGY:
+ *   For each candidate we fetch `thumbnailUrl` if present (5–30 KB each),
+ *   otherwise fall back to `originalUrl`.  This cuts transfer size by ~95 %
+ *   compared to always fetching full originals.
+ *
+ * COST STRATEGY:
+ *   Small images (≤ 384 px) cost only 258 tokens each in Gemini.
+ *   4 thumbnails = ~1 032 tokens vs. 4 separate full-image calls = ~16 000 tokens.
+ *
+ * Returns null when no images can be fetched or Gemini fails.
+ */
+export async function batchValidateImages(
+  candidates: Array<{ originalUrl: string; thumbnailUrl?: string }>,
+  celebrityName: string,
+  description: string,
+  factYear?: number,
+): Promise<BatchValidationResult | null> {
+  if (candidates.length === 0) return null;
+
+  const apiKey = process.env.GOOGLE_GEMINI_API_KEY;
+  if (!apiKey) {
+    // Fallback: return first candidate at 50% confidence so pipeline doesn't break
+    return { bestIndex: 0, confidence: 50, reasoning: 'API key not configured', scores: candidates.map(() => 50) };
+  }
+
+  const batch = candidates.slice(0, BATCH_SIZE);
+
+  // ── Fetch all thumbnails in parallel ──────────────────────────────────────
+  const fetchedImages = await Promise.all(
+    batch.map(async (c) => {
+      // Use thumbnail when available — much smaller download
+      const urlToFetch = c.thumbnailUrl ?? c.originalUrl;
+      const imgData = await fetchImageWithRetry(urlToFetch);
+      return imgData; // null on failure
+    })
+  );
+
+  // Only keep candidates where the image was successfully fetched
+  const validPairs = batch
+    .map((c, i) => ({ candidate: c, imgData: fetchedImages[i], index: i }))
+    .filter((p): p is typeof p & { imgData: NonNullable<typeof p.imgData> } => p.imgData !== null);
+
+  if (validPairs.length === 0) {
+    console.log('  ❌ Batch: no images could be fetched');
+    return null;
+  }
+
+  try {
+    const { GoogleGenerativeAI } = await import('@google/generative-ai');
+    const genAI = new GoogleGenerativeAI(apiKey);
+    // Use flash — cheapest model, thumbnails don't need pro-level vision
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+
+    // Build multi-image prompt parts
+    const parts: any[] = [];
+
+    // Era context line — injected when we know the fact year.
+    // This is the key editorial signal: a blurry b&w photo from 1965 is MORE
+    // VALUABLE than a perfect 2020 studio headshot for a fact set in 1965.
+    const eraLine = factYear
+      ? `\nEra: this section describes events from circa ${factYear}. Photos visually matching that era are MORE VALUABLE (add 10 pts).`
+      : '';
+
+    const eraPenalty = factYear && factYear < 2000
+      ? `\nPENALTY: Deduct 15 pts if the photo is clearly a modern (post-2010) promotional/studio shot — it is wrong for a ${factYear} context.`
+      : '';
+
+    const intro = `You are validating photos for a RARE BIOGRAPHICAL article.
+Celebrity: "${celebrityName}"
+Section: "${description}"${eraLine}${eraPenalty}
+
+I'm showing you ${validPairs.length} image(s) numbered 1–${validPairs.length}.
+Score EACH from 0–100:
+  85–100 : "${celebrityName}" is clearly visible + matches context${factYear ? ` + visually era-appropriate (~${factYear})` : ''}
+  65–84  : "${celebrityName}" is visible, partial match or uncertain era
+  40–64  : Might be "${celebrityName}", unclear
+  0–39   : Wrong person, stock art, illustration, OR "${celebrityName}" NOT visible${factYear ? `, OR clearly wrong era` : ''}
+
+BONUS +10: Photo is visually archival/historical (b&w, aged, newspaper scan, documentary style).
+PENALIZE: collage/grid of multiple photos (−20), face cropped off (−15), large watermark (−10).
+
+OUTPUT ONLY valid JSON (no markdown):
+{"scores":[85,10,40],"best":0,"reasoning":"one sentence about the winner"}`;
+
+    parts.push({ text: intro });
+
+    for (let i = 0; i < validPairs.length; i++) {
+      const { imgData } = validPairs[i];
+      parts.push({ text: `\nImage ${i + 1}:` });
+      parts.push({ inlineData: { data: Buffer.from(imgData.buffer).toString('base64'), mimeType: imgData.mimeType } });
+    }
+
+    const result = await model.generateContent(parts);
+    const responseText = result.response.text();
+    const jsonMatch = responseText.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) throw new Error('No JSON in response');
+
+    const parsed = JSON.parse(jsonMatch[0]) as { scores: number[]; best: number; reasoning: string };
+
+    // Map back to original indices (some images may have failed to fetch)
+    const fullScores = batch.map((_, i) => {
+      const validIdx = validPairs.findIndex(p => p.index === i);
+      return validIdx >= 0 ? (parsed.scores[validIdx] ?? 0) : 0;
+    });
+
+    const bestLocalIdx = parsed.best ?? fullScores.indexOf(Math.max(...fullScores));
+    const bestOriginalIdx = validPairs[bestLocalIdx]?.index ?? 0;
+    const bestScore = fullScores[bestOriginalIdx] ?? 0;
+
+    console.log(`  🎯 Batch result (${validPairs.length} images): scores=${JSON.stringify(fullScores)}, best=[${bestOriginalIdx}] ${bestScore}%`);
+    console.log(`  💬 ${parsed.reasoning}`);
+
+    return {
+      bestIndex: bestOriginalIdx,
+      confidence: bestScore,
+      reasoning: parsed.reasoning,
+      scores: fullScores,
+    };
+  } catch (error: any) {
+    console.error('  ❌ Batch Gemini validation error:', error.message);
+    return null;
+  }
 }
 
 /**

@@ -4,19 +4,29 @@ import Redis from 'ioredis';
 // Railway provides REDIS_URL, fallback to separate host/port for local dev
 const connection = process.env.REDIS_URL
   ? new Redis(process.env.REDIS_URL, {
-      maxRetriesPerRequest: null
+      maxRetriesPerRequest: null,
+      // Limit reconnection backoff to avoid Redis CPU spikes
+      retryStrategy: (times: number) => Math.min(times * 500, 5000),
     })
   : new Redis({
       host: process.env.REDIS_HOST || 'localhost',
       port: Number(process.env.REDIS_PORT) || 6379,
-      maxRetriesPerRequest: null
+      maxRetriesPerRequest: null,
+      retryStrategy: (times: number) => Math.min(times * 500, 5000),
     });
 
-export const researchQueue = new Queue('research', { connection });
-export const generationQueue = new Queue('generation', { connection });
-export const coverQueue = new Queue('cover', { connection });
-export const publishQueue = new Queue('publish', { connection });
-export const autopilotQueue = new Queue('autopilot', { connection });
+// Job cleanup: keep only last 20 completed jobs (1 day) and last 10 failed (7 days)
+// This prevents Redis RAM from growing indefinitely — was the main $15 Redis cost driver
+const defaultJobOptions = {
+  removeOnComplete: { count: 20, age: 24 * 60 * 60 },      // 24h
+  removeOnFail:    { count: 10, age: 7 * 24 * 60 * 60 },   // 7 days
+};
+
+export const researchQueue   = new Queue('research',   { connection, defaultJobOptions });
+export const generationQueue = new Queue('generation', { connection, defaultJobOptions });
+export const coverQueue      = new Queue('cover',      { connection, defaultJobOptions });
+export const publishQueue    = new Queue('publish',    { connection, defaultJobOptions });
+export const autopilotQueue  = new Queue('autopilot',  { connection, defaultJobOptions });
 
 // Research Worker - using Perplexity for deep web search
 const researchWorker = new Worker('research', async (job) => {
@@ -44,7 +54,7 @@ const researchWorker = new Worker('research', async (job) => {
     console.error(`Research failed for article ${articleId}:`, error);
     throw error;
   }
-}, { connection });
+}, { connection, ...defaultJobOptions });
 
 researchWorker.on('failed', (job, err) => {
   console.error(`Research job ${job?.id} failed:`, err);
@@ -65,7 +75,7 @@ const generationWorker = new Worker('generation', async (job) => {
     console.error(`Generation failed for article ${articleId}:`, error);
     throw error;
   }
-}, { connection });
+}, { connection, ...defaultJobOptions });
 
 generationWorker.on('failed', (job, err) => {
   console.error(`Generation job ${job?.id} failed:`, err);
@@ -86,7 +96,7 @@ const coverWorker = new Worker('cover', async (job) => {
     console.error(`Cover generation failed for article ${articleId}:`, error);
     throw error;
   }
-}, { connection });
+}, { connection, ...defaultJobOptions });
 
 coverWorker.on('failed', (job, err) => {
   console.error(`Cover job ${job?.id} failed:`, err);
@@ -107,7 +117,7 @@ const publishWorker = new Worker('publish', async (job) => {
     console.error(`Publishing failed for article ${articleId} to ${platform}:`, error);
     throw error;
   }
-}, { connection });
+}, { connection, ...defaultJobOptions });
 
 publishWorker.on('failed', (job, err) => {
   console.error(`Publish job ${job?.id} failed:`, err);
@@ -137,7 +147,7 @@ const autopilotWorker = new Worker('autopilot', async (job) => {
     console.error(`❌ Autopilot failed for article ${articleId}:`, error);
     throw error;
   }
-}, { connection });
+}, { connection, ...defaultJobOptions });
 
 autopilotWorker.on('failed', (job, err) => {
   console.error(`Autopilot job ${job?.id} failed:`, err);

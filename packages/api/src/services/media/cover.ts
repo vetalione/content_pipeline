@@ -1,3 +1,4 @@
+import path from 'path';
 import { prisma } from '../../lib/db';
 import { PipelineStage } from '@content-pipeline/shared';
 import { generateCoverImage, getCoverPreviewOptions, getAllColorCombinations, CoverGenerationOptions } from './gemini-cover';
@@ -69,8 +70,12 @@ export async function generateCover(articleId: string, template: string, options
     throw new Error(result.error || 'Failed to generate cover');
   }
 
-  // Create data URL for storage
-  const imageUrl = `data:image/jpeg;base64,${result.imageBase64}`;
+  // Store only the file path URL — NOT the full base64 string.
+  // Storing base64 in PostgreSQL was bloating the DB by 1-4 MB per cover version
+  // and causing massive network egress every time the frontend loaded article data.
+  // The file is already saved to disk by gemini-cover.ts; we just reference it.
+  const fileName = result.imagePath ? path.basename(result.imagePath) : `cover_${articleId}_v${Date.now()}.jpg`;
+  const imageUrl = `/covers/${fileName}`;
 
   // Get current version number (increment from latest)
   const latestCover = await prisma.coverImage.findFirst({

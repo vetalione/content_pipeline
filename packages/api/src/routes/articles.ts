@@ -217,8 +217,9 @@ articlesRouter.post('/:id/facts/:factId/regenerate-image', async (req, res, next
     const query = queryParts.join(' ');
     console.log(`🔄 Regenerating image for fact "${fact.title}": ${query}`);
     
-    // Get up to 5 alternative images
-    const imageResults = await searchGoogleImages(query, 5);
+    // Get up to 5 alternative image candidates (returns ImageCandidate[] with thumbnails)
+    const imageCandidates = await searchGoogleImages(query, 5, article.celebrityName);
+    const imageResults = imageCandidates.map(c => c.originalUrl);
     
     if (imageResults.length === 0) {
       return res.status(404).json({ 

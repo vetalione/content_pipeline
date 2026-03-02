@@ -1,8 +1,14 @@
 [phases.setup]
-nixPkgs = ["nodejs_20", "openssl", "playwright-driver", "chromium"]
+# Only keep openssl (required by Prisma). Removed duplicate chromium/playwright-driver nix packages
+# — playwright installs its own Chromium in the install phase below.
+nixPkgs = ["nodejs_20", "openssl"]
 
 [phases.install]
-cmds = ["npm install --ignore-scripts --legacy-peer-deps", "npx playwright install chromium --with-deps"]
+cmds = [
+  "npm install --ignore-scripts --legacy-peer-deps",
+  # Install only Chromium (skip Firefox/WebKit) — saves ~600 MB in the container
+  "npx playwright install chromium --with-deps"
+]
 
 [phases.build]
 cmds = [

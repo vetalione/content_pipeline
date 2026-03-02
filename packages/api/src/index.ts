@@ -1,6 +1,7 @@
 import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
+import path from 'path';
 import { createServer } from 'http';
 import { articlesRouter } from './routes/articles';
 import { pipelineRouter } from './routes/pipeline';
@@ -41,6 +42,21 @@ app.use(cors({
 }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
+
+// Serve generated cover images as static files.
+// Covers are stored in /covers/ on the Railway Volume — serving them here avoids
+// encoding them as base64 in PostgreSQL and sending MBs through the API on every request.
+app.use('/covers', express.static(path.join(process.cwd(), 'covers'), {
+  maxAge: '7d',   // Browser cache — reduces repeated egress for the same image
+  etag: true,
+}));
+
+// Fact-images downloaded by findFactImage() to bypass hotlink protection.
+// Images are cached here once; original third-party URLs may return 403 on direct embed.
+app.use('/images', express.static(path.join(process.cwd(), 'images'), {
+  maxAge: '7d',
+  etag: true,
+}));
 
 // Routes
 app.get('/health', (req, res) => {

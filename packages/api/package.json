@@ -11,7 +11,8 @@
     "db:migrate": "prisma migrate deploy",
     "db:studio": "prisma studio",
     "db:seed": "tsx prisma/seed.ts",
-    "postinstall": "prisma generate"
+    "db:cleanup": "tsx scripts/cleanup-all-articles.ts",
+    "postinstall": "prisma generate && PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 playwright install-deps || true"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",

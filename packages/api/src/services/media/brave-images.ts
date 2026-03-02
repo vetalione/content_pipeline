@@ -1,17 +1,20 @@
 /**
  * Brave Search API - backup source for finding images
  * https://brave.com/search/api/
- * 
- * SEARCH STRATEGY:
- * - Brave works best with short keyword queries (2-5 words)
- * - Format: "Name context year photo"
- * - Supports language filtering via search_lang parameter
+ *
+ * Returns ImageCandidate[] — same shape as searchGoogleImages so the orchestrator
+ * in google-images.ts can treat all sources uniformly.
+ * Each result carries a thumbnailUrl (Brave CDN, ~10–30 KB) for cheap Gemini
+ * validation instead of the full original image.
  */
+
+import { type ImageCandidate, scoreByMetadata } from './google-images';
 
 interface BraveImageResult {
   url: string;
   title: string;
   source: string;
+  page_fetched?: string;  // page URL where the image appears
   thumbnail: {
     src: string;
   };
@@ -24,23 +27,28 @@ interface BraveImageResult {
 
 interface BraveSearchResponse {
   results?: BraveImageResult[];
-  query?: {
-    original: string;
-  };
+  query?: { original: string };
 }
 
+const STOCK_DOMAINS = [
+  'gettyimages', 'shutterstock', 'istockphoto', 'alamy',
+  'dreamstime', 'depositphotos', 'pond5', 'stocksy',
+];
+
 /**
- * Search for images using Brave Search API
- * @param query Search query (short keywords work best)
- * @param numResults Number of results to return
- * @param lang Search language: 'en' or 'ru'
- * @returns Array of direct image URLs
+ * Search for images using Brave Search API.
+ *
+ * @param query       Short keyword query (2–5 words work best)
+ * @param numResults  Max results (Brave API caps at 20)
+ * @param lang        'en' or 'ru' — controls Brave's search_lang parameter
+ * @param personName  Used for metadata scoring; pass for best results
  */
 export async function searchBraveImages(
   query: string,
   numResults: number = 10,
-  lang: 'en' | 'ru' = 'en'
-): Promise<string[]> {
+  lang: 'en' | 'ru' = 'en',
+  personName?: string
+): Promise<ImageCandidate[]> {
   const apiKey = process.env.BRAVE_SEARCH_API_KEY;
 
   if (!apiKey) {
@@ -59,9 +67,9 @@ export async function searchBraveImages(
 
     const response = await fetch(url.toString(), {
       headers: {
-        'Accept': 'application/json',
-        'X-Subscription-Token': apiKey
-      }
+        Accept: 'application/json',
+        'X-Subscription-Token': apiKey,
+      },
     });
 
     if (!response.ok) {
@@ -77,48 +85,40 @@ export async function searchBraveImages(
       return [];
     }
 
-    // Filter for direct image URLs and exclude stock photos
-    const imageUrls = data.results
+    const candidates: ImageCandidate[] = data.results
       .filter(item => {
-        const imageUrl = item.properties?.url || item.url;
+        const imageUrl = (item.properties?.url || item.url || '').toLowerCase();
         if (!imageUrl) return false;
-        
-        const lower = imageUrl.toLowerCase();
-        return (
-          lower.endsWith('.jpg') || 
-          lower.endsWith('.jpeg') || 
-          lower.endsWith('.png') ||
-          lower.includes('.jpg?') ||
-          lower.includes('.jpeg?') ||
-          lower.includes('.png?')
-        );
-      })
-      .filter(item => {
+        // Must be a direct image URL
+        const isImage = imageUrl.endsWith('.jpg') || imageUrl.endsWith('.jpeg') ||
+                        imageUrl.endsWith('.png') || imageUrl.includes('.jpg?') ||
+                        imageUrl.includes('.jpeg?') || imageUrl.includes('.png?');
+        if (!isImage) return false;
         // Exclude stock photo sites
-        const source = (item.source || '').toLowerCase();
-        const url = (item.properties?.url || item.url || '').toLowerCase();
-        return !(
-          source.includes('gettyimages') ||
-          source.includes('shutterstock') ||
-          source.includes('istockphoto') ||
-          source.includes('alamy') ||
-          source.includes('dreamstime') ||
-          source.includes('depositphotos') ||
-          url.includes('gettyimages') ||
-          url.includes('shutterstock') ||
-          url.includes('istockphoto')
-        );
+        const isStock = STOCK_DOMAINS.some(d => imageUrl.includes(d) || (item.source ?? '').toLowerCase().includes(d));
+        if (isStock) return false;
+        // Minimum size
+        const w = item.properties?.width ?? 0;
+        const h = item.properties?.height ?? 0;
+        return w >= 400 || h >= 300 || (w === 0 && h === 0);
       })
-      .filter(item => {
-        // Only large enough images
-        const width = item.properties?.width || 0;
-        const height = item.properties?.height || 0;
-        return width >= 400 || height >= 300 || (width === 0 && height === 0);
-      })
-      .map(item => item.properties?.url || item.url);
+      .map(item => {
+        const originalUrl = item.properties?.url || item.url;
+        const candidate: ImageCandidate = {
+          originalUrl,
+          // Brave's thumbnail.src is their CDN-proxied small preview (~10–30 KB)
+          thumbnailUrl: item.thumbnail?.src,
+          title: item.title,
+          sourceUrl: item.page_fetched || undefined,
+          source: 'brave',
+          metadataScore: 0,
+        };
+        candidate.metadataScore = scoreByMetadata(candidate, personName ?? '');
+        return candidate;
+      });
 
-    console.log(`✅ Brave found ${imageUrls.length} valid images for: "${query}"`);
-    return imageUrls;
+    console.log(`✅ Brave found ${candidates.length} valid candidates for: "${query}"`);
+    return candidates;
 
   } catch (error) {
     console.error('Brave Image Search error:', error);
