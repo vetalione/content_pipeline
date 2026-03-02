@@ -114,7 +114,7 @@ export async function validateImageRelevance(
     }
 
     const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
 
     const base64Image = Buffer.from(imageData.buffer).toString('base64');
 
@@ -305,7 +305,7 @@ export async function batchValidateImages(
     const { GoogleGenerativeAI } = await import('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(apiKey);
     // Use flash — cheapest model, thumbnails don't need pro-level vision
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
 
     // Build multi-image prompt parts
     const parts: any[] = [];
