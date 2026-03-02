@@ -17,7 +17,7 @@
  * - Early exit when high-confidence match found
  */
 
-import { GoogleGenerativeAI } from '@google/generative-ai';
+import { GoogleGenAI } from '@google/genai';
 
 interface ImageValidationResult {
   isRelevant: boolean;
@@ -113,8 +113,7 @@ export async function validateImageRelevance(
       };
     }
 
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+    const genAI = new GoogleGenAI({ apiKey });
 
     const base64Image = Buffer.from(imageData.buffer).toString('base64');
 
@@ -150,12 +149,18 @@ OUTPUT FORMAT (JSON only, no other text):
 
 REMEMBER: "confidence" = how GOOD this image is for the article, NOT how sure you are!`;
 
-    const result = await model.generateContent([
-      { inlineData: { data: base64Image, mimeType: imageData.mimeType } },
-      { text: prompt }
-    ]);
+    const result = await genAI.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: [{
+        role: 'user',
+        parts: [
+          { inlineData: { data: base64Image, mimeType: imageData.mimeType } },
+          { text: prompt }
+        ]
+      }]
+    });
 
-    const response = result.response.text();
+    const response = result.text ?? '';
     const jsonMatch = response.match(/\{[\s\S]*\}/);
     
     if (!jsonMatch) {
@@ -302,10 +307,8 @@ export async function batchValidateImages(
   }
 
   try {
-    const { GoogleGenerativeAI } = await import('@google/generative-ai');
-    const genAI = new GoogleGenerativeAI(apiKey);
     // Use flash — cheapest model, thumbnails don't need pro-level vision
-    const model = genAI.getGenerativeModel({ model: 'gemini-3-flash-preview' });
+    const genAI = new GoogleGenAI({ apiKey });
 
     // Build multi-image prompt parts
     const parts: any[] = [];
@@ -346,8 +349,11 @@ OUTPUT ONLY valid JSON (no markdown):
       parts.push({ inlineData: { data: Buffer.from(imgData.buffer).toString('base64'), mimeType: imgData.mimeType } });
     }
 
-    const result = await model.generateContent(parts);
-    const responseText = result.response.text();
+    const result = await genAI.models.generateContent({
+      model: 'gemini-3-flash-preview',
+      contents: [{ role: 'user', parts }]
+    });
+    const responseText = result.text ?? '';
     const jsonMatch = responseText.match(/\{[\s\S]*\}/);
     if (!jsonMatch) throw new Error('No JSON in response');
 
