@@ -750,7 +750,8 @@ export async function findFactImage(
 
   const enQueryParts = [englishName];
   if (keywords) enQueryParts.push(keywords);
-  if (factYear) enQueryParts.push(String(factYear));
+  // Only add year separately if it's not already embedded in the extracted keywords
+  if (factYear && !keywords.includes(String(factYear))) enQueryParts.push(String(factYear));
   enQueryParts.push('photo');
   const enQuery = enQueryParts.join(' ');
   console.log(`  🔎 Google EN: "${enQuery}"`);
@@ -759,7 +760,7 @@ export async function findFactImage(
   if (!nameIsEnglish) {
     const ruParts = [celebrityName];
     if (keywordsRu) ruParts.push(keywordsRu);
-    if (factYear) ruParts.push(String(factYear));
+    if (factYear && !keywordsRu.includes(String(factYear))) ruParts.push(String(factYear));
     ruParts.push(factYear && factYear < 1970 ? 'архивное фото' : factYear && factYear < 2000 ? 'редкое фото' : 'фото');
     ruQuery = ruParts.join(' ');
     console.log(`  🔎 Google RU: "${ruQuery}"`);
@@ -906,11 +907,38 @@ export async function findFactImage(
  * Returns a local path like `/images/img_1234567890.jpg` served by Express static,
  * or the original URL if both downloads fail (browser will try its luck).
  */
+/**
+ * If the URL is a Wikimedia Commons wiki page (e.g. /wiki/File:XXX.jpg),
+ * resolve it to the actual upload URL via the MediaWiki API.
+ * These wiki-page URLs return HTML, not image data — causes 404 on download.
+ */
+async function resolveWikimediaPageUrl(url: string): Promise<string> {
+  const fileMatch = url.match(/commons\.wikimedia\.org\/wiki\/(File:[^#?\s]+)/i);
+  if (!fileMatch) return url;
+  try {
+    const title = decodeURIComponent(fileMatch[1]);
+    const apiUrl = `https://commons.wikimedia.org/w/api.php?action=query&titles=${encodeURIComponent(title)}&prop=imageinfo&iiprop=url&format=json&origin=*`;
+    const res = await fetch(apiUrl, { signal: AbortSignal.timeout(6000) });
+    if (!res.ok) return url;
+    const data = await res.json() as any;
+    const pages = data?.query?.pages;
+    if (!pages) return url;
+    const imageUrl = (Object.values(pages)[0] as any)?.imageinfo?.[0]?.url as string | undefined;
+    if (imageUrl) {
+      console.log(`  🔗 Resolved wiki page → ${imageUrl.substring(0, 80)}`);
+      return imageUrl;
+    }
+  } catch { /* fall through to original */ }
+  return url;
+}
+
 async function downloadAndCacheImage(
   originalUrl: string,
   thumbnailUrl?: string
 ): Promise<string> {
-  const urlsToTry = [originalUrl, thumbnailUrl].filter((u): u is string => !!u);
+  // Resolve Wikimedia Commons page URLs to actual image URLs before attempting download
+  const resolvedOriginal = await resolveWikimediaPageUrl(originalUrl);
+  const urlsToTry = [resolvedOriginal, thumbnailUrl].filter((u): u is string => !!u);
 
   for (const url of urlsToTry) {
     try {

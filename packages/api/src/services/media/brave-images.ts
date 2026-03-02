@@ -10,6 +10,15 @@
 
 import { type ImageCandidate, scoreByMetadata } from './google-images';
 
+// Free plan rate limit: 1 request/second. Throttle all calls globally.
+let _lastBraveCallTime = 0;
+const BRAVE_MIN_INTERVAL_MS = 1200;
+async function braveThrottle(): Promise<void> {
+  const wait = BRAVE_MIN_INTERVAL_MS - (Date.now() - _lastBraveCallTime);
+  if (wait > 0) await new Promise(r => setTimeout(r, wait));
+  _lastBraveCallTime = Date.now();
+}
+
 interface BraveImageResult {
   url: string;
   title: string;
@@ -64,6 +73,7 @@ export async function searchBraveImages(
     url.searchParams.set('search_lang', lang);
 
     console.log(`🦁 Brave [${lang.toUpperCase()}]: "${query}"`);
+    await braveThrottle();
 
     const response = await fetch(url.toString(), {
       headers: {

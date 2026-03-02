@@ -305,7 +305,7 @@ export async function batchValidateImages(
     const { GoogleGenerativeAI } = await import('@google/generative-ai');
     const genAI = new GoogleGenerativeAI(apiKey);
     // Use flash — cheapest model, thumbnails don't need pro-level vision
-    const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash' });
+    const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
 
     // Build multi-image prompt parts
     const parts: any[] = [];
