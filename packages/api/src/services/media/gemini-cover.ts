@@ -327,7 +327,8 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
           throw new Error('No image in response');
         }
         
-        const coversDir = path.join(process.cwd(), 'covers');
+        const storageBase = process.env.STORAGE_PATH || process.cwd();
+        const coversDir = path.join(storageBase, 'covers');
         await fs.mkdir(coversDir, { recursive: true });
         
         const fileName = `cover_${Date.now()}.jpg`;

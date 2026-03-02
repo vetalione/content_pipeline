@@ -43,17 +43,20 @@ app.use(cors({
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
+// Resolve storage root. On Railway, set STORAGE_PATH to the Volume mount path
+// (e.g. /data or /app/storage) so generated covers/images survive redeploys.
+// Without a Volume every restart wipes the files — set STORAGE_PATH on your
+// Railway service and point the Volume to the same directory.
+const storageBase = process.env.STORAGE_PATH || process.cwd();
+
 // Serve generated cover images as static files.
-// Covers are stored in /covers/ on the Railway Volume — serving them here avoids
-// encoding them as base64 in PostgreSQL and sending MBs through the API on every request.
-app.use('/covers', express.static(path.join(process.cwd(), 'covers'), {
+app.use('/covers', express.static(path.join(storageBase, 'covers'), {
   maxAge: '7d',   // Browser cache — reduces repeated egress for the same image
   etag: true,
 }));
 
 // Fact-images downloaded by findFactImage() to bypass hotlink protection.
-// Images are cached here once; original third-party URLs may return 403 on direct embed.
-app.use('/images', express.static(path.join(process.cwd(), 'images'), {
+app.use('/images', express.static(path.join(storageBase, 'images'), {
   maxAge: '7d',
   etag: true,
 }));
@@ -82,6 +85,12 @@ httpServer.listen(PORT, HOST, () => {
   console.log(`🚀 API server running on port ${PORT}`);
   console.log(`📊 Health check: /health`);
   console.log(`🌍 Environment: ${process.env.NODE_ENV || 'development'}`);
+  console.log(`📁 Storage: ${storageBase}  (covers → ${storageBase}/covers, images → ${storageBase}/images)`);
+  if (!process.env.STORAGE_PATH) {
+    console.warn(`⚠️  STORAGE_PATH not set — using process.cwd() (${process.cwd()}).`);
+    console.warn(`   Files written here are on EPHEMERAL disk and will be lost on redeploy.`);
+    console.warn(`   Set STORAGE_PATH to your Railway Volume mount path to persist covers/images.`);
+  }
 });
 
 export default app;

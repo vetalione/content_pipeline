@@ -966,7 +966,8 @@ async function downloadAndCacheImage(
       const buffer = await response.arrayBuffer();
       const ext = contentType.includes('png') ? 'png' : 'jpg';
       const fileName = `img_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
-      const imagesDir = path.join(process.cwd(), 'images');
+      const storageBase = process.env.STORAGE_PATH || process.cwd();
+      const imagesDir = path.join(storageBase, 'images');
       await fs.mkdir(imagesDir, { recursive: true });
       await fs.writeFile(path.join(imagesDir, fileName), Buffer.from(buffer));
 
