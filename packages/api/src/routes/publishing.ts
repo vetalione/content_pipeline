@@ -201,7 +201,9 @@ publishingRouter.post('/auth/dzen/session', async (req, res, next) => {
     
     const fs = await import('fs');
     const path = await import('path');
-    const sessionsDir = path.resolve(__dirname, '../services/publishers/sessions');
+    const sessionsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+      ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'dzen-sessions')
+      : path.resolve(__dirname, '../services/publishers/sessions');
     const sessionPath = path.join(sessionsDir, 'dzen-state.json');
     
     // Ensure directory exists
@@ -229,7 +231,10 @@ publishingRouter.post('/auth/dzen/session', async (req, res, next) => {
 publishingRouter.get('/auth/dzen/status', async (req, res) => {
   const fs = await import('fs');
   const path = await import('path');
-  const sessionPath = path.resolve(__dirname, '../services/publishers/sessions/dzen-state.json');
+  const sessionsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'dzen-sessions')
+    : path.resolve(__dirname, '../services/publishers/sessions');
+  const sessionPath = path.join(sessionsDir, 'dzen-state.json');
   
   const hasSession = fs.existsSync(sessionPath);
   
