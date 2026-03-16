@@ -81,18 +81,17 @@ export default function PublishingView({ articleId, publications }: Props) {
             return (
               <button
                 key={platform}
-                onClick={() => !isPublished && togglePlatform(platform as Platform)}
-                disabled={isPublished}
+                onClick={() => togglePlatform(platform as Platform)}
                 className={`p-4 rounded-lg border-2 transition-all ${
-                  isPublished
-                    ? 'bg-green-50 border-green-500 cursor-not-allowed'
-                    : isSelected
+                  isSelected
                     ? 'bg-primary text-white border-primary'
+                    : isPublished
+                    ? 'bg-green-50 border-green-500 hover:border-primary'
                     : 'bg-white border-gray-300 hover:border-primary'
                 }`}
               >
                 <div className="font-semibold">{label}</div>
-                {isPublished && (
+                {isPublished && !isSelected && (
                   <div className="text-xs mt-1">✓ Опубликовано</div>
                 )}
               </button>
