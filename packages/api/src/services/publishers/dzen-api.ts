@@ -15,11 +15,7 @@
 
 import fs from 'fs';
 import path from 'path';
-import { execFile } from 'child_process';
-import { promisify } from 'util';
 import { ArticleContent, CoverImage } from '@content-pipeline/shared';
-
-const execFileAsync = promisify(execFile);
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -226,7 +222,7 @@ async function createDraft(cookieHeader: string, csrfToken: string): Promise<str
   return pubId;
 }
 
-/** Upload an image to the publication, returns image ID */
+/** Upload an image to imgbb, then tell Dzen to fetch it via add-image-from-url */
 async function uploadImage(
   cookieHeader: string,
   csrfToken: string,
@@ -237,97 +233,98 @@ async function uploadImage(
   console.log(`🖼️  Uploading image: ${typeof imageSource === 'string' ? imageSource.substring(0, 60) : 'buffer'}...`);
   
   let imageBuffer: Buffer;
-  let contentType = 'image/jpeg';
 
   if (typeof imageSource === 'string') {
     if (imageSource.startsWith('http://') || imageSource.startsWith('https://')) {
-      // Download from URL
       const imgRes = await fetch(imageSource);
       if (!imgRes.ok) {
         throw new Error(`Failed to download image: ${imgRes.status} from ${imageSource.substring(0, 80)}`);
       }
       imageBuffer = Buffer.from(await imgRes.arrayBuffer());
-      // Detect content type from response or URL
-      const ct = imgRes.headers.get('content-type');
-      if (ct) contentType = ct;
-      if (imageSource.includes('.png')) contentType = 'image/png';
-      if (imageSource.includes('.webp')) contentType = 'image/webp';
     } else {
-      // Local file path — resolve web-served paths to filesystem
       const resolved = resolveImagePath(imageSource);
       if (!fs.existsSync(resolved)) {
         throw new Error(`Image file not found: ${resolved} (original: ${imageSource})`);
       }
       imageBuffer = fs.readFileSync(resolved);
-      if (resolved.endsWith('.png')) contentType = 'image/png';
-      if (resolved.endsWith('.webp')) contentType = 'image/webp';
     }
   } else {
     imageBuffer = imageSource;
   }
 
-  console.log(`   📦 Image size: ${(imageBuffer.length / 1024).toFixed(1)} KB, type: ${contentType}`);
+  console.log(`   📦 Image size: ${(imageBuffer.length / 1024).toFixed(1)} KB`);
 
-  const uploadUrl = `${BASE_URL}/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
+  // Step 1: Upload to imgbb to get a public URL
+  const imgbbUrl = await uploadToImgbb(imageBuffer, filename);
+  console.log(`   📤 imgbb URL: ${imgbbUrl}`);
+
+  // Step 2: Tell Dzen to fetch the image from that URL
   const editReferer = `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`;
-
-  // Write image to temp file for curl
-  const tmpFile = path.join('/tmp', `dzen_upload_${Date.now()}_${filename}`);
-  fs.writeFileSync(tmpFile, imageBuffer);
+  const addImageUrl = `${BASE_URL}/editor-api/v2/add-image-from-url?publicationId=${publicationId}&url=${encodeURIComponent(imgbbUrl)}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
   
-  const allHeaders = browserHeaders(cookieHeader, csrfToken, editReferer);
+  console.log(`   🔗 Using add-image-from-url (Dzen fetches from imgbb)`);
   
-  // Build curl args — uses OpenSSL TLS (different fingerprint from Node.js)
-  const curlArgs = [
-    '-v',                            // verbose — show TLS handshake details
-    '--max-time', '60',              // timeout 60s
-    '--http1.1',                     // Force HTTP/1.1 (matches browser HAR)
-    '-X', 'POST',
-    '-F', `file=@${tmpFile};type=${contentType};filename=${filename}`,
-  ];
+  const res = await fetch(addImageUrl, {
+    method: 'POST',
+    headers: {
+      ...browserHeaders(cookieHeader, csrfToken, editReferer),
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({}),
+  });
   
-  // Add all browser headers
-  for (const [key, value] of Object.entries(allHeaders)) {
-    if (key === 'Accept-Encoding') continue; // let curl handle
-    curlArgs.push('-H', `${key}: ${value}`);
-  }
+  console.log(`   📡 Response status: ${res.status} ${res.statusText}`);
+  const responseBody = await res.text();
+  console.log(`   📄 Response body (first 500 chars): ${responseBody.substring(0, 500)}`);
   
-  curlArgs.push(uploadUrl);
-  
-  console.log(`   🔧 Upload URL: ${uploadUrl}`);
-  console.log(`   🔧 Using curl -v --http1.1 (verbose, forced HTTP/1.1)`);
-  
-  let responseBody: string;
-  try {
-    const { stdout, stderr } = await execFileAsync('curl', curlArgs, { maxBuffer: 10 * 1024 * 1024 });
-    // curl -v outputs connection info to stderr
-    if (stderr) console.log(`   🔧 curl verbose:\n${stderr.substring(0, 1500)}`);
-    responseBody = stdout;
-    console.log(`   📄 Response body (first 500 chars): ${responseBody.substring(0, 500)}`);
-  } catch (curlErr: any) {
-    console.log(`   ❌ curl failed: ${curlErr.message?.substring(0, 200)}`);
-    // With -v, stderr contains the TLS handshake and connection details
-    console.log(`   ❌ curl verbose output:\n${curlErr.stderr?.substring(0, 2000)}`);
-    throw new Error(`Network error uploading image via curl: ${curlErr.stderr?.substring(0, 300) || curlErr.message}`);
-  } finally {
-    // Clean up temp file
-    try { fs.unlinkSync(tmpFile); } catch {}
+  if (!res.ok) {
+    throw new Error(`add-image-from-url failed: ${res.status} ${responseBody.substring(0, 500)}`);
   }
   
   let data: any;
   try {
     data = JSON.parse(responseBody);
   } catch {
-    throw new Error(`Invalid JSON response from curl: ${responseBody.substring(0, 300)}`);
+    throw new Error(`Invalid JSON response: ${responseBody.substring(0, 200)}`);
   }
   
   const imageId = data.id || data.imageId || data._id;
   if (!imageId) {
-    throw new Error('Image upload response missing ID: ' + JSON.stringify(data).substring(0, 300));
+    throw new Error('Image response missing ID: ' + JSON.stringify(data).substring(0, 300));
   }
   
   console.log(`   ✅ Image uploaded: ${imageId}`);
   return imageId;
+}
+
+/** Upload image buffer to imgbb, returns direct image URL */
+async function uploadToImgbb(imageBuffer: Buffer, filename: string): Promise<string> {
+  const apiKey = process.env.IMGBB_API_KEY;
+  if (!apiKey) {
+    throw new Error('IMGBB_API_KEY not set — required for Dzen image uploads');
+  }
+
+  const imageBase64 = imageBuffer.toString('base64');
+  const name = path.basename(filename, path.extname(filename));
+
+  const params = new URLSearchParams({
+    key: apiKey,
+    image: imageBase64,
+    name,
+  });
+
+  const res = await fetch('https://api.imgbb.com/1/upload', {
+    method: 'POST',
+    body: params,
+    signal: AbortSignal.timeout(30_000),
+  });
+
+  const data = await res.json() as any;
+  if (data.success && data.data?.display_url) {
+    return data.data.display_url;
+  }
+  
+  throw new Error(`imgbb upload failed: ${JSON.stringify(data).substring(0, 200)}`);
 }
 
 /** Publish article with full content */
