@@ -123,7 +123,10 @@ async function uploadToTelegraph(imagePath: string): Promise<string | null> {
       : ext === '.webp' ? 'image/webp'
       : 'image/jpeg';
 
+    // Use https.request for reliable binary upload
+    const https = await import('https');
     const boundary = '----TelegraphUpload' + Math.random().toString(36).substring(2);
+
     const preamble = Buffer.from(
       `--${boundary}\r\n` +
       `Content-Disposition: form-data; name="file"; filename="image${ext}"\r\n` +
@@ -132,13 +135,35 @@ async function uploadToTelegraph(imagePath: string): Promise<string | null> {
     const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`);
     const body = Buffer.concat([preamble, imageBuffer, epilogue]);
 
-    const res = await fetch('https://telegra.ph/upload', {
-      method: 'POST',
-      headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
-      body,
+    const data = await new Promise<any>((resolve, reject) => {
+      const req = https.request(
+        {
+          hostname: 'telegra.ph',
+          path: '/upload',
+          method: 'POST',
+          headers: {
+            'Content-Type': `multipart/form-data; boundary=${boundary}`,
+            'Content-Length': body.length,
+          },
+        },
+        (res) => {
+          const chunks: Buffer[] = [];
+          res.on('data', (chunk: Buffer) => chunks.push(chunk));
+          res.on('end', () => {
+            const responseBody = Buffer.concat(chunks).toString('utf-8');
+            try {
+              resolve(JSON.parse(responseBody));
+            } catch {
+              reject(new Error(`Invalid response: ${responseBody.substring(0, 200)}`));
+            }
+          });
+        }
+      );
+      req.on('error', (err: Error) => reject(err));
+      req.write(body);
+      req.end();
     });
 
-    const data = await res.json() as any;
     if (Array.isArray(data) && data[0]?.src) {
       return `https://telegra.ph${data[0].src}`;
     }
@@ -320,7 +345,7 @@ async function sendPhotoMessage(
   caption: string
 ): Promise<string | null> {
   try {
-    // If it's a local file, upload it
+    // If it's a local file, upload it via multipart
     if (!photoSource.startsWith('http://') && !photoSource.startsWith('https://')) {
       const resolved = resolveImagePath(photoSource);
       if (!fs.existsSync(resolved)) {
@@ -332,6 +357,7 @@ async function sendPhotoMessage(
       const ext = path.extname(resolved).toLowerCase();
       const contentType = ext === '.png' ? 'image/png' : 'image/jpeg';
 
+      const https = await import('https');
       const boundary = '----TelegramUpload' + Math.random().toString(36).substring(2);
       const parts: Buffer[] = [];
 
@@ -367,13 +393,31 @@ async function sendPhotoMessage(
       parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
       const body = Buffer.concat(parts);
 
-      const res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendPhoto`, {
-        method: 'POST',
-        headers: { 'Content-Type': `multipart/form-data; boundary=${boundary}` },
-        body,
+      const data = await new Promise<any>((resolve, reject) => {
+        const req = https.request(
+          {
+            hostname: 'api.telegram.org',
+            path: `/bot${botToken}/sendPhoto`,
+            method: 'POST',
+            headers: {
+              'Content-Type': `multipart/form-data; boundary=${boundary}`,
+              'Content-Length': body.length,
+            },
+          },
+          (res) => {
+            const chunks: Buffer[] = [];
+            res.on('data', (chunk: Buffer) => chunks.push(chunk));
+            res.on('end', () => {
+              try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
+              catch { reject(new Error('Invalid JSON from Telegram')); }
+            });
+          }
+        );
+        req.on('error', (err: Error) => reject(err));
+        req.write(body);
+        req.end();
       });
 
-      const data = await res.json() as any;
       if (data.ok && data.result) {
         return buildMessageUrl(channelId, data.result.message_id);
       }
@@ -381,7 +425,7 @@ async function sendPhotoMessage(
       return null;
     }
 
-    // Remote URL — pass as string
+    // Remote URL — pass as string (JSON body, fetch is fine here)
     const res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendPhoto`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
