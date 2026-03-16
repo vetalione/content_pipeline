@@ -280,11 +280,19 @@ async function uploadImage(
   console.log(`   🔧 Upload URL: ${uploadUrl}`);
   console.log(`   🔧 Using fetch() with FormData (same connection pool as CSRF/draft)`);
   
-  const res = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: allHeaders,
-    body: formData,
-  });
+  let res: Response;
+  try {
+    res = await fetch(uploadUrl, {
+      method: 'POST',
+      headers: allHeaders,
+      body: formData,
+    });
+  } catch (fetchErr: any) {
+    console.log(`   ❌ fetch() threw: ${fetchErr.message}`);
+    console.log(`   ❌ cause: ${fetchErr.cause ? JSON.stringify(fetchErr.cause, Object.getOwnPropertyNames(fetchErr.cause)) : 'none'}`);
+    console.log(`   ❌ code: ${fetchErr.code || 'none'}`);
+    throw new Error(`Network error uploading image: ${fetchErr.message} (cause: ${fetchErr.cause?.message || 'unknown'})`);
+  }
   
   console.log(`   📡 Response status: ${res.status} ${res.statusText}`);
   const responseBody = await res.text();
