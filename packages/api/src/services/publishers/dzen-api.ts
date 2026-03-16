@@ -15,7 +15,11 @@
 
 import fs from 'fs';
 import path from 'path';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { ArticleContent, CoverImage } from '@content-pipeline/shared';
+
+const execFileAsync = promisify(execFile);
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -267,46 +271,51 @@ async function uploadImage(
   const uploadUrl = `${BASE_URL}/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
   const editReferer = `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`;
 
-  // Use fetch() with Blob — same HTTP client as CSRF/createDraft/publish (shared keep-alive pool)
-  const blob = new Blob([new Uint8Array(imageBuffer)], { type: contentType });
-  const formData = new FormData();
-  formData.append('file', blob, filename);
-
+  // Write image to temp file for curl
+  const tmpFile = path.join('/tmp', `dzen_upload_${Date.now()}_${filename}`);
+  fs.writeFileSync(tmpFile, imageBuffer);
+  
   const allHeaders = browserHeaders(cookieHeader, csrfToken, editReferer);
-  // Remove Content-Type — fetch sets it automatically with correct boundary for FormData
-  // Remove Accept-Encoding — let fetch handle decompression
-  delete allHeaders['Accept-Encoding'];
   
-  console.log(`   🔧 Upload URL: ${uploadUrl}`);
-  console.log(`   🔧 Using fetch() with FormData (same connection pool as CSRF/draft)`);
+  // Build curl args — uses OpenSSL TLS (different fingerprint from Node.js)
+  const curlArgs = [
+    '-s', '-S',                      // silent but show errors
+    '--max-time', '60',              // timeout 60s
+    '-X', 'POST',
+    '-F', `file=@${tmpFile};type=${contentType};filename=${filename}`,
+  ];
   
-  let res: Response;
-  try {
-    res = await fetch(uploadUrl, {
-      method: 'POST',
-      headers: allHeaders,
-      body: formData,
-    });
-  } catch (fetchErr: any) {
-    console.log(`   ❌ fetch() threw: ${fetchErr.message}`);
-    console.log(`   ❌ cause: ${fetchErr.cause ? JSON.stringify(fetchErr.cause, Object.getOwnPropertyNames(fetchErr.cause)) : 'none'}`);
-    console.log(`   ❌ code: ${fetchErr.code || 'none'}`);
-    throw new Error(`Network error uploading image: ${fetchErr.message} (cause: ${fetchErr.cause?.message || 'unknown'})`);
+  // Add all browser headers
+  for (const [key, value] of Object.entries(allHeaders)) {
+    if (key === 'Accept-Encoding') continue; // let curl handle
+    curlArgs.push('-H', `${key}: ${value}`);
   }
   
-  console.log(`   📡 Response status: ${res.status} ${res.statusText}`);
-  const responseBody = await res.text();
-  console.log(`   📄 Response body (first 500 chars): ${responseBody.substring(0, 500)}`);
+  curlArgs.push(uploadUrl);
   
-  if (!res.ok) {
-    throw new Error(`Image upload failed: ${res.status} ${responseBody.substring(0, 500)}`);
+  console.log(`   🔧 Upload URL: ${uploadUrl}`);
+  console.log(`   🔧 Using curl (OpenSSL TLS, different fingerprint from Node.js)`);
+  
+  let responseBody: string;
+  try {
+    const { stdout, stderr } = await execFileAsync('curl', curlArgs, { maxBuffer: 10 * 1024 * 1024 });
+    if (stderr) console.log(`   🔧 curl stderr: ${stderr.substring(0, 200)}`);
+    responseBody = stdout;
+    console.log(`   📄 Response body (first 500 chars): ${responseBody.substring(0, 500)}`);
+  } catch (curlErr: any) {
+    console.log(`   ❌ curl failed: ${curlErr.message?.substring(0, 300)}`);
+    console.log(`   ❌ curl stderr: ${curlErr.stderr?.substring(0, 300)}`);
+    throw new Error(`Network error uploading image via curl: ${curlErr.message}`);
+  } finally {
+    // Clean up temp file
+    try { fs.unlinkSync(tmpFile); } catch {}
   }
   
   let data: any;
   try {
     data = JSON.parse(responseBody);
   } catch {
-    throw new Error(`Invalid JSON response: ${responseBody.substring(0, 200)}`);
+    throw new Error(`Invalid JSON response from curl: ${responseBody.substring(0, 300)}`);
   }
   
   const imageId = data.id || data.imageId || data._id;
