@@ -99,6 +99,23 @@ async function getTelegraphToken(): Promise<string> {
 
 // ── Image Helpers ──────────────────────────────────────────────────────────────
 
+/** Get the public base URL of our API server (Railway domain or custom) */
+function getPublicBaseUrl(): string | null {
+  if (process.env.API_BASE_URL) return process.env.API_BASE_URL.replace(/\/$/, '');
+  if (process.env.RAILWAY_PUBLIC_DOMAIN) return `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`;
+  return null;
+}
+
+/** Convert a local path (/images/..., /covers/...) to a public URL */
+function getPublicImageUrl(localPath: string): string | null {
+  const baseUrl = getPublicBaseUrl();
+  if (!baseUrl) return null;
+  if (localPath.startsWith('/images/') || localPath.startsWith('/covers/')) {
+    return `${baseUrl}${localPath}`;
+  }
+  return null;
+}
+
 /** Resolve local path (/images/..., /covers/...) to full filesystem path */
 function resolveImagePath(imagePath: string): string {
   const storageBase = process.env.STORAGE_PATH || process.cwd();
@@ -175,7 +192,7 @@ async function uploadToTelegraph(imagePath: string): Promise<string | null> {
   }
 }
 
-/** Get image URL for Telegraph content — upload if local, use direct URL if remote */
+/** Get image URL for Telegraph content — prefer public URL, fall back to upload */
 async function getImageForTelegraph(imagePath: string): Promise<string | null> {
   if (!imagePath) return null;
 
@@ -184,7 +201,14 @@ async function getImageForTelegraph(imagePath: string): Promise<string | null> {
     return imagePath;
   }
 
-  // Upload local file to Telegraph
+  // Prefer public URL — no upload needed, Telegraph fetches from our server
+  const publicUrl = getPublicImageUrl(imagePath);
+  if (publicUrl) {
+    console.log(`   🔗 Using public URL: ${publicUrl.substring(0, 80)}`);
+    return publicUrl;
+  }
+
+  // Fallback: upload local file to Telegraph
   return uploadToTelegraph(imagePath);
 }
 
@@ -345,15 +369,22 @@ async function sendPhotoMessage(
   caption: string
 ): Promise<string | null> {
   try {
-    // If it's a local file, upload it via multipart
+    // Convert local paths to public URLs when possible (avoids multipart upload issues)
     if (!photoSource.startsWith('http://') && !photoSource.startsWith('https://')) {
-      const resolved = resolveImagePath(photoSource);
-      if (!fs.existsSync(resolved)) {
-        console.error(`   ⚠️ Cover file not found: ${resolved}`);
-        return null;
-      }
+      const publicUrl = getPublicImageUrl(photoSource);
+      if (publicUrl) {
+        console.log(`   🔗 Cover: using public URL: ${publicUrl.substring(0, 80)}`);
+        photoSource = publicUrl;
+        // Fall through to remote URL handler below
+      } else {
+        // No public URL available — upload file directly
+        const resolved = resolveImagePath(photoSource);
+        if (!fs.existsSync(resolved)) {
+          console.error(`   ⚠️ Cover file not found: ${resolved}`);
+          return null;
+        }
 
-      const imageBuffer = fs.readFileSync(resolved);
+        const imageBuffer = fs.readFileSync(resolved);
       const ext = path.extname(resolved).toLowerCase();
       const contentType = ext === '.png' ? 'image/png' : 'image/jpeg';
 
@@ -423,6 +454,7 @@ async function sendPhotoMessage(
       }
       console.error('   ⚠️ sendPhoto failed:', JSON.stringify(data).substring(0, 200));
       return null;
+      } // end of else (no public URL)
     }
 
     // Remote URL — pass as string (JSON body, fetch is fine here)

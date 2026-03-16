@@ -939,11 +939,10 @@ async function downloadAndCacheImage(
   // Resolve Wikimedia Commons page URLs to actual image URLs before attempting download
   const resolvedOriginal = await resolveWikimediaPageUrl(originalUrl);
 
-  // Try thumbnailUrl FIRST: it's served from CDN (Brave/Wikimedia/Google),
-  // has no hotlink protection, and is always accessible.
-  // originalUrl is on the source website and often blocks foreign Referers.
-  // We do want the original for quality, so we try it SECOND.
-  const urlsToTry = [thumbnailUrl, resolvedOriginal].filter((u): u is string => !!u);
+  // Try originalUrl FIRST for quality — we only download ONE image per section
+  // (already validated by Gemini), so the extra attempt is worth it.
+  // Fallback to thumbnailUrl (CDN proxy, always accessible) if original fails.
+  const urlsToTry = [resolvedOriginal, thumbnailUrl].filter((u): u is string => !!u);
   // De-duplicate: if thumbnail === original (can happen for Wikimedia)
   const uniqueUrls = [...new Set(urlsToTry)];
 
@@ -975,16 +974,24 @@ async function downloadAndCacheImage(
       }
 
       const buffer = await response.arrayBuffer();
+      const bytes = Buffer.from(buffer);
+
+      // Reject tiny files — likely placeholders or broken thumbnails
+      if (bytes.length < 20_000) {
+        console.log(`  ⚠️ Image too small (${(bytes.length / 1024).toFixed(1)} KB), skipping: ${url.substring(0, 70)}`);
+        continue;
+      }
+
       const ext = contentType.includes('png') ? 'png' : 'jpg';
       const fileName = `img_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
       const storageBase = process.env.STORAGE_PATH || process.cwd();
       const imagesDir = path.join(storageBase, 'images');
       await fs.mkdir(imagesDir, { recursive: true });
-      await fs.writeFile(path.join(imagesDir, fileName), Buffer.from(buffer));
+      await fs.writeFile(path.join(imagesDir, fileName), bytes);
 
       const localPath = `/images/${fileName}`;
-      const sourceTag = url === originalUrl ? 'original' : 'thumbnail-fallback';
-      console.log(`  💾 Cached image (${sourceTag}): ${localPath}`);
+      const sourceTag = url === resolvedOriginal ? 'original' : 'thumbnail-fallback';
+      console.log(`  💾 Cached image (${sourceTag}, ${(bytes.length / 1024).toFixed(0)} KB): ${localPath}`);
       return localPath;
 
     } catch (err: any) {
