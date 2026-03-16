@@ -15,6 +15,7 @@
 
 import fs from 'fs';
 import path from 'path';
+import https from 'https';
 import { ArticleContent, CoverImage } from '@content-pipeline/shared';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -57,6 +58,9 @@ const SESSIONS_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH
 const DZEN_STATE_FILE = path.join(SESSIONS_DIR, 'dzen-state.json');
 const BASE_URL = 'https://dzen.ru';
 const PUBLISHER_ID = '5c0c260beb86bc00a9389420';
+const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+
+const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -129,6 +133,7 @@ async function getCsrfToken(cookieHeader: string): Promise<string> {
     headers: {
       'Cookie': cookieHeader,
       'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}`,
+      'User-Agent': USER_AGENT,
     },
   });
   
@@ -155,6 +160,7 @@ async function createDraft(cookieHeader: string, csrfToken: string): Promise<str
         'X-Csrf-Token': csrfToken,
         'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}`,
         'Origin': BASE_URL,
+        'User-Agent': USER_AGENT,
       },
       body: JSON.stringify({
         title: '',
@@ -222,35 +228,57 @@ async function uploadImage(
 
   console.log(`   📦 Image size: ${(imageBuffer.length / 1024).toFixed(1)} KB, type: ${contentType}`);
 
-  // Use FormData + Blob for proper multipart upload (Node.js 18+)
-  const formData = new FormData();
-  const blob = new Blob([new Uint8Array(imageBuffer)], { type: contentType });
-  formData.append('file', blob, filename);
+  // Use https.request for reliable binary upload (Node.js fetch/undici has UND_ERR_SOCKET issues)
+  const boundary = '----DzenUpload' + Math.random().toString(36).substring(2);
   
-  const url = `${BASE_URL}/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
+  const preamble = Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
+    `Content-Type: ${contentType}\r\n\r\n`
+  );
+  const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`);
+  const body = Buffer.concat([preamble, imageBuffer, epilogue]);
   
-  let res: Response;
-  try {
-    res = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Cookie': cookieHeader,
-        'X-Csrf-Token': csrfToken,
-        'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`,
-        'Origin': BASE_URL,
+  const uploadPath = `/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
+  
+  const data = await new Promise<any>((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'dzen.ru',
+        path: uploadPath,
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length,
+          'Cookie': cookieHeader,
+          'X-Csrf-Token': csrfToken,
+          'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`,
+          'Origin': BASE_URL,
+          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
       },
-      body: formData,
-    });
-  } catch (fetchErr: any) {
-    throw new Error(`Network error uploading image: ${fetchErr.cause?.code || fetchErr.cause?.message || fetchErr.message}`);
-  }
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const responseBody = Buffer.concat(chunks).toString('utf-8');
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              resolve(JSON.parse(responseBody));
+            } catch {
+              reject(new Error(`Invalid JSON response: ${responseBody.substring(0, 200)}`));
+            }
+          } else {
+            reject(new Error(`Image upload failed: ${res.statusCode} ${responseBody.substring(0, 300)}`));
+          }
+        });
+      }
+    );
+    req.on('error', (err) => reject(new Error(`Network error uploading image: ${err.message}`)));
+    req.write(body);
+    req.end();
+  });
   
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`Image upload failed: ${res.status} ${text.substring(0, 300)}`);
-  }
-  
-  const data = await res.json() as any;
   const imageId = data.id || data.imageId || data._id;
   if (!imageId) {
     throw new Error('Image upload response missing ID: ' + JSON.stringify(data).substring(0, 300));
@@ -314,6 +342,7 @@ async function publishContent(
         'X-Csrf-Token': csrfToken,
         'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`,
         'Origin': BASE_URL,
+        'User-Agent': USER_AGENT,
       },
       body: JSON.stringify(body),
     }
@@ -321,6 +350,9 @@ async function publishContent(
   
   if (!res.ok) {
     const text = await res.text();
+    if (text.includes('captcha-required-error')) {
+      throw new Error('Captcha required by Dzen — session may need refresh or too many requests');
+    }
     throw new Error(`${draft ? 'Save' : 'Publish'} failed: ${res.status} ${text.substring(0, 300)}`);
   }
   
@@ -373,6 +405,7 @@ async function buildBlocks(
         break; // success — stop trying
       } catch (err: any) {
         console.error(`   ⚠️ Cover upload failed (${imgSource.substring(0, 50)}):`, err.message);
+        await sleep(500);
       }
     }
     if (!coverImageId) {
@@ -393,6 +426,7 @@ async function buildBlocks(
     // Section image
     if (section.imageUrl) {
       try {
+        await sleep(500); // Delay between uploads to avoid rate limiting
         const imgId = await uploadImage(
           cookieHeader, csrfToken, publicationId,
           section.imageUrl,
