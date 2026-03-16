@@ -281,23 +281,35 @@ async function uploadImage(
 
   // Use HTTPS/1.1 with full browser headers matching Chrome exactly
   const allHeaders = browserHeaders(cookieHeader, csrfToken, editReferer);
+  
+  const fpToken = loadFpToken();
+  console.log(`   🔧 FP-Token: ${fpToken ? fpToken.substring(0, 20) + '...' : 'MISSING'}`);
+  console.log(`   🔧 Cookie: ${cookieHeader.substring(0, 60)}...`);
+  console.log(`   🔧 Upload path: ${uploadPath}`);
+  
+  const requestHeaders = {
+    ...allHeaders,
+    'Content-Type': `multipart/form-data; boundary=${boundary}`,
+    'Content-Length': body.length,
+  };
+  console.log(`   🔧 Request headers: ${JSON.stringify(Object.keys(requestHeaders))}`);
+  
   const data = await new Promise<any>((resolve, reject) => {
     const req = https.request(
       {
         hostname: 'dzen.ru',
         path: uploadPath,
         method: 'POST',
-        headers: {
-          ...allHeaders,
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': body.length,
-        },
+        headers: requestHeaders,
       },
       (res) => {
+        console.log(`   📡 Response status: ${res.statusCode} ${res.statusMessage}`);
+        console.log(`   📡 Response headers: ${JSON.stringify(res.headers).substring(0, 500)}`);
         const chunks: Buffer[] = [];
         res.on('data', (chunk) => chunks.push(chunk));
         res.on('end', () => {
           const responseBody = Buffer.concat(chunks).toString('utf-8');
+          console.log(`   📄 Response body (first 500 chars): ${responseBody.substring(0, 500)}`);
           if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
             try {
               resolve(JSON.parse(responseBody));
@@ -305,13 +317,18 @@ async function uploadImage(
               reject(new Error(`Invalid JSON response: ${responseBody.substring(0, 200)}`));
             }
           } else {
-            reject(new Error(`Image upload failed: ${res.statusCode} ${responseBody.substring(0, 300)}`));
+            reject(new Error(`Image upload failed: ${res.statusCode} ${responseBody.substring(0, 500)}`));
           }
         });
       }
     );
-    req.on('error', (err) => reject(new Error(`Network error uploading image: ${err.message}`)));
+    req.on('error', (err) => {
+      console.log(`   ❌ Request error event: ${err.message}`);
+      console.log(`   ❌ Error code: ${(err as any).code || 'none'}`);
+      reject(new Error(`Network error uploading image: ${err.message}`));
+    });
     req.setTimeout(30000, () => {
+      console.log(`   ⏰ Request timed out after 30s`);
       req.destroy(new Error('Image upload timed out after 30s'));
     });
     req.write(body);
