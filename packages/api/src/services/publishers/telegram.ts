@@ -106,14 +106,13 @@ function getPublicBaseUrl(): string | null {
   return null;
 }
 
-/** Convert a local path (/images/..., /covers/...) or full filesystem path to a public URL */
+/** Convert a local path to a public URL (fallback when imgbb is not configured) */
 function getPublicImageUrl(localPath: string): string | null {
   const baseUrl = getPublicBaseUrl();
   if (!baseUrl) return null;
   if (localPath.startsWith('/images/') || localPath.startsWith('/covers/')) {
     return `${baseUrl}${localPath}`;
   }
-  // Full filesystem path — extract /images/... or /covers/... suffix
   const storageBase = process.env.STORAGE_PATH || process.cwd();
   if (localPath.startsWith(storageBase)) {
     const relative = localPath.substring(storageBase.length);
@@ -125,7 +124,7 @@ function getPublicImageUrl(localPath: string): string | null {
   return null;
 }
 
-/** Resolve local path (/images/..., /covers/...) to full filesystem path */
+/** Resolve local path (/images/..., /covers/...) or full filesystem path to absolute path */
 function resolveImagePath(imagePath: string): string {
   const storageBase = process.env.STORAGE_PATH || process.cwd();
   if (imagePath.startsWith('/images/') || imagePath.startsWith('/covers/')) {
@@ -134,91 +133,76 @@ function resolveImagePath(imagePath: string): string {
   return imagePath;
 }
 
-/** Upload a local image to Telegraph, returns Telegraph URL */
-async function uploadToTelegraph(imagePath: string): Promise<string | null> {
+// ── imgbb — permanent free image hosting ───────────────────────────────────────
+
+/**
+ * Upload an image to imgbb.com (free, permanent hosting).
+ * Env: IMGBB_API_KEY — get one free at https://api.imgbb.com/
+ * Returns the public display URL or null on failure.
+ */
+async function uploadToImgbb(imagePath: string): Promise<string | null> {
+  const apiKey = process.env.IMGBB_API_KEY;
+  if (!apiKey) return null;
+
   const resolved = resolveImagePath(imagePath);
   if (!fs.existsSync(resolved)) {
-    console.error(`   ⚠️ Image not found: ${resolved}`);
+    console.error(`   ⚠️ imgbb: file not found: ${resolved}`);
     return null;
   }
 
   try {
-    const imageBuffer = fs.readFileSync(resolved);
-    const ext = path.extname(resolved).toLowerCase();
-    const contentType = ext === '.png' ? 'image/png'
-      : ext === '.webp' ? 'image/webp'
-      : 'image/jpeg';
+    const imageBase64 = fs.readFileSync(resolved).toString('base64');
+    const name = path.basename(resolved, path.extname(resolved));
 
-    // Use https.request for reliable binary upload
-    const https = await import('https');
-    const boundary = '----TelegraphUpload' + Math.random().toString(36).substring(2);
-
-    const preamble = Buffer.from(
-      `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="file"; filename="image${ext}"\r\n` +
-      `Content-Type: ${contentType}\r\n\r\n`
-    );
-    const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`);
-    const body = Buffer.concat([preamble, imageBuffer, epilogue]);
-
-    const data = await new Promise<any>((resolve, reject) => {
-      const req = https.request(
-        {
-          hostname: 'telegra.ph',
-          path: '/upload',
-          method: 'POST',
-          headers: {
-            'Content-Type': `multipart/form-data; boundary=${boundary}`,
-            'Content-Length': body.length,
-          },
-        },
-        (res) => {
-          const chunks: Buffer[] = [];
-          res.on('data', (chunk: Buffer) => chunks.push(chunk));
-          res.on('end', () => {
-            const responseBody = Buffer.concat(chunks).toString('utf-8');
-            try {
-              resolve(JSON.parse(responseBody));
-            } catch {
-              reject(new Error(`Invalid response: ${responseBody.substring(0, 200)}`));
-            }
-          });
-        }
-      );
-      req.on('error', (err: Error) => reject(err));
-      req.write(body);
-      req.end();
+    const params = new URLSearchParams({
+      key: apiKey,
+      image: imageBase64,
+      name,
     });
 
-    if (Array.isArray(data) && data[0]?.src) {
-      return `https://telegra.ph${data[0].src}`;
+    const res = await fetch('https://api.imgbb.com/1/upload', {
+      method: 'POST',
+      body: params,
+      signal: AbortSignal.timeout(30_000),
+    });
+
+    const data = await res.json() as any;
+    if (data.success && data.data?.display_url) {
+      console.log(`   📤 imgbb: ${data.data.display_url.substring(0, 70)}`);
+      return data.data.display_url;
     }
-    console.error('   ⚠️ Telegraph upload unexpected response:', JSON.stringify(data).substring(0, 200));
+
+    console.error('   ⚠️ imgbb upload failed:', JSON.stringify(data).substring(0, 200));
     return null;
   } catch (err: any) {
-    console.error('   ⚠️ Telegraph upload failed:', err.message);
+    console.error('   ⚠️ imgbb error:', err.message);
     return null;
   }
 }
 
-/** Get image URL for Telegraph content — prefer public URL, fall back to upload */
+/** Get image URL for Telegraph content.
+ *  Priority: remote URL → imgbb (permanent) → Railway public URL (fallback) */
 async function getImageForTelegraph(imagePath: string): Promise<string | null> {
   if (!imagePath) return null;
 
-  // Remote URL — Telegraph can fetch it directly
+  // Already a remote URL — use directly
   if (imagePath.startsWith('http://') || imagePath.startsWith('https://')) {
     return imagePath;
   }
 
-  // Prefer public URL — no upload needed, Telegraph fetches from our server
+  // 1. imgbb — permanent free hosting (preferred)
+  const imgbbUrl = await uploadToImgbb(imagePath);
+  if (imgbbUrl) return imgbbUrl;
+
+  // 2. Railway public URL — works while Railway hosts the file
   const publicUrl = getPublicImageUrl(imagePath);
   if (publicUrl) {
-    console.log(`   🔗 Using public URL: ${publicUrl.substring(0, 80)}`);
+    console.log(`   🔗 Fallback to public URL: ${publicUrl.substring(0, 80)}`);
     return publicUrl;
   }
 
-  // Fallback: upload local file to Telegraph
-  return uploadToTelegraph(imagePath);
+  console.error(`   ⚠️ No image hosting available for: ${imagePath.substring(0, 80)}`);
+  return null;
 }
 
 // ── Telegraph Content Builder ──────────────────────────────────────────────────
@@ -378,95 +362,26 @@ async function sendPhotoMessage(
   caption: string
 ): Promise<string | null> {
   try {
-    // Convert local paths to public URLs when possible (avoids multipart upload issues)
+    // Resolve local paths to remote URLs
     if (!photoSource.startsWith('http://') && !photoSource.startsWith('https://')) {
-      const publicUrl = getPublicImageUrl(photoSource);
-      if (publicUrl) {
-        console.log(`   🔗 Cover: using public URL: ${publicUrl.substring(0, 80)}`);
-        photoSource = publicUrl;
-        // Fall through to remote URL handler below
+      // Try imgbb (permanent)
+      const imgbbUrl = await uploadToImgbb(photoSource);
+      if (imgbbUrl) {
+        photoSource = imgbbUrl;
       } else {
-        // No public URL available — upload file directly
-        const resolved = resolveImagePath(photoSource);
-        if (!fs.existsSync(resolved)) {
-          console.error(`   ⚠️ Cover file not found: ${resolved}`);
-          return null;
+        // Try Railway public URL
+        const publicUrl = getPublicImageUrl(photoSource);
+        if (publicUrl) {
+          console.log(`   🔗 Cover: fallback to public URL: ${publicUrl.substring(0, 80)}`);
+          photoSource = publicUrl;
+        } else {
+          // Last resort: upload file directly via multipart
+          return await sendPhotoMultipart(botToken, channelId, photoSource, caption);
         }
-
-        const imageBuffer = fs.readFileSync(resolved);
-      const ext = path.extname(resolved).toLowerCase();
-      const contentType = ext === '.png' ? 'image/png' : 'image/jpeg';
-
-      const https = await import('https');
-      const boundary = '----TelegramUpload' + Math.random().toString(36).substring(2);
-      const parts: Buffer[] = [];
-
-      // photo field
-      parts.push(Buffer.from(
-        `--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="photo"; filename="cover${ext}"\r\n` +
-        `Content-Type: ${contentType}\r\n\r\n`
-      ));
-      parts.push(imageBuffer);
-
-      // chat_id field
-      parts.push(Buffer.from(
-        `\r\n--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="chat_id"\r\n\r\n` +
-        channelId
-      ));
-
-      // caption field
-      parts.push(Buffer.from(
-        `\r\n--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="caption"\r\n\r\n` +
-        caption
-      ));
-
-      // parse_mode field
-      parts.push(Buffer.from(
-        `\r\n--${boundary}\r\n` +
-        `Content-Disposition: form-data; name="parse_mode"\r\n\r\n` +
-        'HTML'
-      ));
-
-      parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
-      const body = Buffer.concat(parts);
-
-      const data = await new Promise<any>((resolve, reject) => {
-        const req = https.request(
-          {
-            hostname: 'api.telegram.org',
-            path: `/bot${botToken}/sendPhoto`,
-            method: 'POST',
-            headers: {
-              'Content-Type': `multipart/form-data; boundary=${boundary}`,
-              'Content-Length': body.length,
-            },
-          },
-          (res) => {
-            const chunks: Buffer[] = [];
-            res.on('data', (chunk: Buffer) => chunks.push(chunk));
-            res.on('end', () => {
-              try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
-              catch { reject(new Error('Invalid JSON from Telegram')); }
-            });
-          }
-        );
-        req.on('error', (err: Error) => reject(err));
-        req.write(body);
-        req.end();
-      });
-
-      if (data.ok && data.result) {
-        return buildMessageUrl(channelId, data.result.message_id);
       }
-      console.error('   ⚠️ sendPhoto failed:', JSON.stringify(data).substring(0, 200));
-      return null;
-      } // end of else (no public URL)
     }
 
-    // Remote URL — pass as string (JSON body, fetch is fine here)
+    // Remote URL — pass as JSON (simple and reliable)
     const res = await fetch(`${TELEGRAM_API}/bot${botToken}/sendPhoto`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -488,6 +403,80 @@ async function sendPhotoMessage(
     console.error('   ⚠️ sendPhoto error:', err.message);
     return null;
   }
+}
+
+/** Upload a local file directly to Telegram via multipart (fallback) */
+async function sendPhotoMultipart(
+  botToken: string,
+  channelId: string,
+  photoSource: string,
+  caption: string
+): Promise<string | null> {
+  const resolved = resolveImagePath(photoSource);
+  if (!fs.existsSync(resolved)) {
+    console.error(`   ⚠️ Cover file not found: ${resolved}`);
+    return null;
+  }
+
+  const imageBuffer = fs.readFileSync(resolved);
+  const ext = path.extname(resolved).toLowerCase();
+  const contentType = ext === '.png' ? 'image/png' : 'image/jpeg';
+
+  const https = await import('https');
+  const boundary = '----TelegramUpload' + Math.random().toString(36).substring(2);
+  const parts: Buffer[] = [];
+
+  parts.push(Buffer.from(
+    `--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="photo"; filename="cover${ext}"\r\n` +
+    `Content-Type: ${contentType}\r\n\r\n`
+  ));
+  parts.push(imageBuffer);
+  parts.push(Buffer.from(
+    `\r\n--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="chat_id"\r\n\r\n${channelId}`
+  ));
+  parts.push(Buffer.from(
+    `\r\n--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="caption"\r\n\r\n${caption}`
+  ));
+  parts.push(Buffer.from(
+    `\r\n--${boundary}\r\n` +
+    `Content-Disposition: form-data; name="parse_mode"\r\n\r\nHTML`
+  ));
+  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+  const body = Buffer.concat(parts);
+
+  const data = await new Promise<any>((resolve, reject) => {
+    const req = https.request(
+      {
+        hostname: 'api.telegram.org',
+        path: `/bot${botToken}/sendPhoto`,
+        method: 'POST',
+        headers: {
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length,
+        },
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk: Buffer) => chunks.push(chunk));
+        res.on('end', () => {
+          try { resolve(JSON.parse(Buffer.concat(chunks).toString('utf-8'))); }
+          catch { reject(new Error('Invalid JSON from Telegram')); }
+        });
+      }
+    );
+    req.on('error', (err: Error) => reject(err));
+    req.write(body);
+    req.end();
+  });
+
+  if (data.ok && data.result) {
+    return buildMessageUrl(channelId, data.result.message_id);
+  }
+  console.error('   ⚠️ sendPhoto multipart failed:', JSON.stringify(data).substring(0, 200));
+  return null;
 }
 
 /** Send text-only message */
