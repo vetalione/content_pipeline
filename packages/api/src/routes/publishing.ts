@@ -2,6 +2,7 @@ import { Router } from 'express';
 import { publishToTelegram } from '../services/publishers/telegram';
 import { publishToVK } from '../services/publishers/vk';
 import { publishToDzen, setupDzenAuth } from '../services/publishers/dzen';
+import { publishToDzenApi } from '../services/publishers/dzen-api';
 import publishWithPlaywright from '../services/publishers/playwright';
 import { Platform } from '@content-pipeline/shared';
 import { prisma } from '../lib/db';
@@ -52,7 +53,13 @@ publishingRouter.post('/:articleId/publish', async (req, res, next) => {
               result = await publishToVK(article);
               break;
             case Platform.DZEN:
-              const dzenResult = await publishToDzen(article as any);
+              // Try API-based publisher first (faster, no browser needed)
+              // Falls back to Playwright if API fails
+              let dzenResult = await publishToDzenApi(article as any);
+              if (!dzenResult.success) {
+                console.log('⚠️ Dzen API failed, falling back to Playwright:', dzenResult.error);
+                dzenResult = await publishToDzen(article as any);
+              }
               result = { url: dzenResult.url || '' };
               if (!dzenResult.success) {
                 throw new Error(dzenResult.error || 'Dzen publish failed');
