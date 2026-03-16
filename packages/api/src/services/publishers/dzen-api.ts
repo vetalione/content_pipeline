@@ -73,6 +73,20 @@ function blockKey(): string {
   return Array.from({ length: 5 }, () => chars[Math.floor(Math.random() * chars.length)]).join('');
 }
 
+/** Resolve web-served paths (/images/..., /covers/...) to actual filesystem paths */
+function resolveImagePath(imagePath: string): string {
+  const storageBase = process.env.STORAGE_PATH || process.cwd();
+  // Web-served paths need storageBase prefix
+  if (imagePath.startsWith('/images/')) {
+    return path.join(storageBase, imagePath);
+  }
+  if (imagePath.startsWith('/covers/')) {
+    return path.join(storageBase, imagePath);
+  }
+  // Already absolute or a URL — use as-is
+  return imagePath;
+}
+
 /** Load cookies from Playwright session file and return as cookie header string */
 function loadCookies(): string {
   if (!fs.existsSync(DZEN_STATE_FILE)) {
@@ -193,14 +207,20 @@ async function uploadImage(
       if (imageSource.includes('.png')) contentType = 'image/png';
       if (imageSource.includes('.webp')) contentType = 'image/webp';
     } else {
-      // Local file path
-      imageBuffer = fs.readFileSync(imageSource);
-      if (imageSource.endsWith('.png')) contentType = 'image/png';
-      if (imageSource.endsWith('.webp')) contentType = 'image/webp';
+      // Local file path — resolve web-served paths to filesystem
+      const resolved = resolveImagePath(imageSource);
+      if (!fs.existsSync(resolved)) {
+        throw new Error(`Image file not found: ${resolved} (original: ${imageSource})`);
+      }
+      imageBuffer = fs.readFileSync(resolved);
+      if (resolved.endsWith('.png')) contentType = 'image/png';
+      if (resolved.endsWith('.webp')) contentType = 'image/webp';
     }
   } else {
     imageBuffer = imageSource;
   }
+
+  console.log(`   📦 Image size: ${(imageBuffer.length / 1024).toFixed(1)} KB, type: ${contentType}`);
 
   // Build multipart form data manually (Node.js compatible)
   const boundary = '----DzenUpload' + Math.random().toString(36).substring(2);
@@ -234,7 +254,7 @@ async function uploadImage(
   
   if (!res.ok) {
     const text = await res.text();
-    throw new Error(`Image upload failed: ${res.status} ${text.substring(0, 200)}`);
+    throw new Error(`Image upload failed: ${res.status} ${text.substring(0, 300)}`);
   }
   
   const data = await res.json() as any;
@@ -345,14 +365,25 @@ async function buildBlocks(
 
   // 2. Cover image (обложка)
   if (coverImage) {
-    const imgSource = coverImage.processedImageUrl || coverImage.localPath || coverImage.originalImageUrl;
-    if (imgSource) {
+    // Try localPath first (actual filesystem path), then processedImageUrl, then originalImageUrl
+    const candidates = [
+      coverImage.localPath,
+      coverImage.processedImageUrl,
+      coverImage.originalImageUrl,
+    ].filter(Boolean) as string[];
+
+    for (const imgSource of candidates) {
       try {
+        console.log(`   🔍 Trying cover source: ${imgSource.substring(0, 80)}`);
         coverImageId = await uploadImage(cookieHeader, csrfToken, publicationId, imgSource, 'cover.jpg');
         blocks.push(block('atomic:image', '', { image: { id: coverImageId } }));
+        break; // success — stop trying
       } catch (err: any) {
-        console.error('   ⚠️ Cover upload failed:', err.message);
+        console.error(`   ⚠️ Cover upload failed (${imgSource.substring(0, 50)}):`, err.message);
       }
+    }
+    if (!coverImageId) {
+      console.error('   ❌ All cover sources failed');
     }
   }
 
