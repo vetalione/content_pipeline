@@ -16,9 +16,6 @@
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
-import http from 'http';
-import tls from 'tls';
-import { URL } from 'url';
 import { ArticleContent, CoverImage } from '@content-pipeline/shared';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -284,103 +281,41 @@ async function uploadImage(
 
   // Use HTTPS/1.1 with full browser headers matching Chrome exactly
   const allHeaders = browserHeaders(cookieHeader, csrfToken, editReferer);
-  
-  const fpToken = loadFpToken();
-  console.log(`   🔧 Headers: X-FP-Token=${fpToken ? fpToken.substring(0, 20) + '...' : 'MISSING'}, Cookie=${cookieHeader.substring(0, 40)}...`);
-  
-  const proxyUrl = process.env.DZEN_PROXY;
-  
   const data = await new Promise<any>((resolve, reject) => {
-    let req: http.ClientRequest;
-    
-    const responseHandler = (res: http.IncomingMessage) => {
-      console.log(`   📡 Response status: ${res.statusCode}, headers: ${JSON.stringify(res.headers).substring(0, 200)}`);
-      const chunks: Buffer[] = [];
-      res.on('data', (chunk) => chunks.push(chunk));
-      res.on('end', () => {
-        const responseBody = Buffer.concat(chunks).toString('utf-8');
-        console.log(`   📄 Response body: ${responseBody.substring(0, 300)}`);
-        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-          try {
-            resolve(JSON.parse(responseBody));
-          } catch {
-            reject(new Error(`Invalid JSON response: ${responseBody.substring(0, 200)}`));
-          }
-        } else {
-          reject(new Error(`Image upload failed: ${res.statusCode} ${responseBody.substring(0, 300)}`));
-        }
-      });
-    };
-    
-    const requestHeaders = {
-      ...allHeaders,
-      'Content-Type': `multipart/form-data; boundary=${boundary}`,
-      'Content-Length': body.length,
-    };
-    
-    if (proxyUrl) {
-      // Use HTTP CONNECT proxy
-      console.log(`   🌐 Using proxy: ${proxyUrl.replace(/:[^:@]+@/, ':***@')}`);
-      const proxy = new URL(proxyUrl);
-      const proxyReq = http.request({
-        hostname: proxy.hostname,
-        port: parseInt(proxy.port) || 3128,
-        method: 'CONNECT',
-        path: 'dzen.ru:443',
-        headers: proxy.username 
-          ? { 'Proxy-Authorization': 'Basic ' + Buffer.from(`${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`).toString('base64') }
-          : {},
-      });
-      
-      proxyReq.on('connect', (proxyRes, socket) => {
-        if (proxyRes.statusCode !== 200) {
-          reject(new Error(`Proxy CONNECT failed: ${proxyRes.statusCode}`));
-          socket.destroy();
-          return;
-        }
-        const tlsSocket = tls.connect({ socket: socket, servername: 'dzen.ru' });
-        req = https.request({
-          hostname: 'dzen.ru',
-          path: uploadPath,
-          method: 'POST',
-          headers: requestHeaders,
-          createConnection: () => tlsSocket,
-          agent: false,
-        } as any, responseHandler);
-        
-        req.on('error', (err) => reject(new Error(`Network error uploading image via proxy: ${err.message}`)));
-        req.setTimeout(60000, () => {
-          req.destroy(new Error('Image upload timed out after 60s'));
-        });
-        req.write(body);
-        req.end();
-      });
-      
-      proxyReq.on('error', (err) => reject(new Error(`Proxy connection error: ${err.message}`)));
-      proxyReq.setTimeout(15000, () => {
-        proxyReq.destroy(new Error('Proxy connect timed out after 15s'));
-      });
-      proxyReq.end();
-    } else {
-      // Direct connection
-      console.log(`   📡 Direct connection to dzen.ru (no proxy)`);
-      req = https.request(
-        {
-          hostname: 'dzen.ru',
-          path: uploadPath,
-          method: 'POST',
-          headers: requestHeaders,
+    const req = https.request(
+      {
+        hostname: 'dzen.ru',
+        path: uploadPath,
+        method: 'POST',
+        headers: {
+          ...allHeaders,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': body.length,
         },
-        responseHandler
-      );
-    
-      req.on('error', (err) => reject(new Error(`Network error uploading image: ${err.message}`)));
-      req.setTimeout(30000, () => {
-        req.destroy(new Error('Image upload timed out after 30s'));
-      });
-      req.write(body);
-      req.end();
-    }
+      },
+      (res) => {
+        const chunks: Buffer[] = [];
+        res.on('data', (chunk) => chunks.push(chunk));
+        res.on('end', () => {
+          const responseBody = Buffer.concat(chunks).toString('utf-8');
+          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+            try {
+              resolve(JSON.parse(responseBody));
+            } catch {
+              reject(new Error(`Invalid JSON response: ${responseBody.substring(0, 200)}`));
+            }
+          } else {
+            reject(new Error(`Image upload failed: ${res.statusCode} ${responseBody.substring(0, 300)}`));
+          }
+        });
+      }
+    );
+    req.on('error', (err) => reject(new Error(`Network error uploading image: ${err.message}`)));
+    req.setTimeout(30000, () => {
+      req.destroy(new Error('Image upload timed out after 30s'));
+    });
+    req.write(body);
+    req.end();
   });
   
   const imageId = data.id || data.imageId || data._id;
