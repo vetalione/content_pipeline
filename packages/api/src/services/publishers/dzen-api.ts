@@ -338,7 +338,12 @@ async function buildBlocks(
     data,
   });
 
-  // 1. Cover image (обложка) — first block
+  // 1. Title — always first block in the editor
+  if (content.title) {
+    blocks.push(block('header-two', content.title));
+  }
+
+  // 2. Cover image (обложка)
   if (coverImage) {
     const imgSource = coverImage.processedImageUrl || coverImage.localPath || coverImage.originalImageUrl;
     if (imgSource) {
@@ -351,12 +356,12 @@ async function buildBlocks(
     }
   }
 
-  // 2. Teaser / intro
+  // 3. Teaser / intro
   if (content.teaser) {
     blocks.push(block('unstyled', content.teaser));
   }
 
-  // 3. Sections: heading → image → paragraph1 → paragraph2 → blockquote
+  // 4. Sections: heading → image → paragraph1 → paragraph2 → blockquote
   for (const section of content.sections) {
     // Section heading (H2)
     blocks.push(block('header-two', section.heading));
@@ -391,29 +396,29 @@ async function buildBlocks(
     }
   }
 
-  // 4. Conclusion
+  // 5. Conclusion
   if (content.conclusion) {
     blocks.push(block('header-two', content.conclusion.heading));
     blocks.push(block('unstyled', content.conclusion.text));
   }
 
-  // 5. Hero quote
+  // 6. Hero quote
   if (content.heroQuote) {
     blocks.push(block('blockquote', `"${content.heroQuote.text}" — ${content.heroQuote.author}`));
   }
 
-  // 6. Bonus fact
+  // 7. Bonus fact
   if (content.bonusFact) {
     blocks.push(block('header-two', '🎁 Бонусный факт:'));
     blocks.push(block('unstyled', content.bonusFact));
   }
 
-  // 7. CTA
+  // 8. CTA
   if (content.cta) {
     blocks.push(block('unstyled', content.cta));
   }
 
-  // 8. Brand ending
+  // 9. Brand ending
   if (content.brandEnding) {
     blocks.push(block('unstyled', content.brandEnding));
   }
