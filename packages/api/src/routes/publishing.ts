@@ -245,9 +245,48 @@ publishingRouter.get('/auth/dzen/status', async (req, res) => {
     data: {
       platform: 'dzen',
       authenticated: hasSession,
-      sessionPath: hasSession ? sessionPath : null
+      sessionPath: hasSession ? sessionPath : null,
+      hasFpToken: (() => {
+        const fpPath = path.join(sessionsDir, 'dzen-fp-token.txt');
+        return fs.existsSync(fpPath);
+      })()
     }
   });
+});
+
+// Save Dzen X-FP-Token (fingerprint token from browser)
+publishingRouter.post('/auth/dzen/fp-token', async (req, res, next) => {
+  try {
+    const { fpToken } = req.body;
+    
+    if (!fpToken || typeof fpToken !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'fpToken is required (string from X-FP-Token header)'
+      });
+    }
+
+    const fs = await import('fs');
+    const path = await import('path');
+    const sessionsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+      ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'dzen-sessions')
+      : path.resolve(__dirname, '../services/publishers/sessions');
+    const fpPath = path.join(sessionsDir, 'dzen-fp-token.txt');
+
+    if (!fs.existsSync(sessionsDir)) {
+      fs.mkdirSync(sessionsDir, { recursive: true });
+    }
+
+    fs.writeFileSync(fpPath, fpToken.trim());
+    console.log(`✅ Dzen X-FP-Token saved (${fpToken.length} chars)`);
+
+    res.json({
+      success: true,
+      message: 'X-FP-Token saved successfully'
+    });
+  } catch (error) {
+    next(error);
+  }
 });
 
 // ============ DZEN SCREENSHOTS API ============

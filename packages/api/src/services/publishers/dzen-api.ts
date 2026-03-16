@@ -56,9 +56,10 @@ const SESSIONS_DIR = process.env.RAILWAY_VOLUME_MOUNT_PATH
   : path.resolve(__dirname, './sessions');
 
 const DZEN_STATE_FILE = path.join(SESSIONS_DIR, 'dzen-state.json');
+const DZEN_FP_FILE = path.join(SESSIONS_DIR, 'dzen-fp-token.txt');
 const BASE_URL = 'https://dzen.ru';
 const PUBLISHER_ID = '5c0c260beb86bc00a9389420';
-const USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+const USER_AGENT = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36';
 
 const sleep = (ms: number) => new Promise(r => setTimeout(r, ms));
 
@@ -123,6 +124,50 @@ function loadCookies(): string {
   return relevant.map(c => `${c.name}=${c.value}`).join('; ');
 }
 
+/** Load X-FP-Token (fingerprint) from saved file or env var */
+function loadFpToken(): string {
+  // Try env var first
+  if (process.env.DZEN_FP_TOKEN) {
+    return process.env.DZEN_FP_TOKEN;
+  }
+  // Try file
+  if (fs.existsSync(DZEN_FP_FILE)) {
+    return fs.readFileSync(DZEN_FP_FILE, 'utf-8').trim();
+  }
+  return '';
+}
+
+/** Common browser-like headers for all Dzen API requests */
+function browserHeaders(cookieHeader: string, csrfToken?: string, referer?: string): Record<string, string> {
+  const fpToken = loadFpToken();
+  const headers: Record<string, string> = {
+    'Accept': 'application/json',
+    'Accept-Encoding': 'gzip, deflate, br, zstd',
+    'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Cache-Control': 'no-cache',
+    'Connection': 'keep-alive',
+    'Cookie': cookieHeader,
+    'Host': 'dzen.ru',
+    'Origin': BASE_URL,
+    'Pragma': 'no-cache',
+    'Referer': referer || `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}`,
+    'Sec-Fetch-Dest': 'empty',
+    'Sec-Fetch-Mode': 'cors',
+    'Sec-Fetch-Site': 'same-origin',
+    'User-Agent': USER_AGENT,
+    'sec-ch-ua': '"Chromium";v="146", "Not-A.Brand";v="24", "Google Chrome";v="146"',
+    'sec-ch-ua-mobile': '?0',
+    'sec-ch-ua-platform': '"macOS"',
+  };
+  if (csrfToken) {
+    headers['X-Csrf-Token'] = csrfToken;
+  }
+  if (fpToken) {
+    headers['X-FP-Token'] = fpToken;
+  }
+  return headers;
+}
+
 // ── API Methods ────────────────────────────────────────────────────────────────
 
 /** Get CSRF token from Dzen */
@@ -130,11 +175,7 @@ async function getCsrfToken(cookieHeader: string): Promise<string> {
   console.log('🔑 Getting CSRF token...');
   
   const res = await fetch(`${BASE_URL}/media-api/csrf-token`, {
-    headers: {
-      'Cookie': cookieHeader,
-      'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}`,
-      'User-Agent': USER_AGENT,
-    },
+    headers: browserHeaders(cookieHeader),
   });
   
   if (!res.ok) {
@@ -155,12 +196,8 @@ async function createDraft(cookieHeader: string, csrfToken: string): Promise<str
     {
       method: 'POST',
       headers: {
+        ...browserHeaders(cookieHeader, csrfToken),
         'Content-Type': 'application/json',
-        'Cookie': cookieHeader,
-        'X-Csrf-Token': csrfToken,
-        'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}`,
-        'Origin': BASE_URL,
-        'User-Agent': USER_AGENT,
       },
       body: JSON.stringify({
         title: '',
@@ -240,8 +277,10 @@ async function uploadImage(
   const body = Buffer.concat([preamble, imageBuffer, epilogue]);
   
   const uploadPath = `/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
+  const editReferer = `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`;
 
-  // Use HTTPS/1.1 with full browser headers
+  // Use HTTPS/1.1 with full browser headers matching Chrome exactly
+  const allHeaders = browserHeaders(cookieHeader, csrfToken, editReferer);
   const data = await new Promise<any>((resolve, reject) => {
     const req = https.request(
       {
@@ -249,18 +288,9 @@ async function uploadImage(
         path: uploadPath,
         method: 'POST',
         headers: {
+          ...allHeaders,
           'Content-Type': `multipart/form-data; boundary=${boundary}`,
           'Content-Length': body.length,
-          'Cookie': cookieHeader,
-          'X-Csrf-Token': csrfToken,
-          'Origin': BASE_URL,
-          'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`,
-          'User-Agent': USER_AGENT,
-          'Accept': '*/*',
-          'Accept-Language': 'en-US,en;q=0.9,ru;q=0.8',
-          'Sec-Fetch-Dest': 'empty',
-          'Sec-Fetch-Mode': 'cors',
-          'Sec-Fetch-Site': 'same-origin',
         },
       },
       (res) => {
@@ -281,6 +311,9 @@ async function uploadImage(
       }
     );
     req.on('error', (err) => reject(new Error(`Network error uploading image: ${err.message}`)));
+    req.setTimeout(30000, () => {
+      req.destroy(new Error('Image upload timed out after 30s'));
+    });
     req.write(body);
     req.end();
   });
@@ -338,17 +371,14 @@ async function publishContent(
     fp: '',
   };
   
+  const editReferer = `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`;
   const res = await fetch(
     `${BASE_URL}/editor-api/v2/${endpoint}?publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`,
     {
       method: 'POST',
       headers: {
+        ...browserHeaders(cookieHeader, csrfToken, editReferer),
         'Content-Type': 'application/json',
-        'Cookie': cookieHeader,
-        'X-Csrf-Token': csrfToken,
-        'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`,
-        'Origin': BASE_URL,
-        'User-Agent': USER_AGENT,
       },
       body: JSON.stringify(body),
     }

@@ -22,7 +22,9 @@ export default function Settings() {
         '1. Откройте dzen.ru в браузере и войдите в аккаунт',
         '2. Установите расширение "EditThisCookie" или "Cookie-Editor"',
         '3. Экспортируйте все cookies как JSON',
-        '4. Вставьте JSON в поле ниже и нажмите "Сохранить"'
+        '4. Вставьте JSON в поле ниже и нажмите "Сохранить"',
+        '5. Откройте DevTools (F12) → Network → любой запрос к editor-api',
+        '6. Скопируйте значение заголовка X-FP-Token и вставьте ниже'
       ]
     }
   ]);
@@ -30,6 +32,7 @@ export default function Settings() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [cookieInput, setCookieInput] = useState('');
+  const [fpTokenInput, setFpTokenInput] = useState('');
   const [expandedPlatform, setExpandedPlatform] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -130,6 +133,38 @@ export default function Settings() {
         setMessage({ type: 'success', text: 'Cookies сохранены! Авторизация активна.' });
         setCookieInput('');
         setExpandedPlatform(null);
+        checkAuthStatus();
+      } else {
+        throw new Error(data.error || 'Ошибка сохранения');
+      }
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleSaveFpToken = async () => {
+    if (!fpTokenInput.trim()) {
+      setMessage({ type: 'error', text: 'Вставьте X-FP-Token' });
+      return;
+    }
+
+    setSaving('fp-token');
+    setMessage(null);
+
+    try {
+      const response = await fetch(`${API_URL}/api/publishing/auth/dzen/fp-token`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ fpToken: fpTokenInput.trim() })
+      });
+
+      const data = await response.json();
+
+      if (data.success) {
+        setMessage({ type: 'success', text: 'X-FP-Token сохранён!' });
+        setFpTokenInput('');
         checkAuthStatus();
       } else {
         throw new Error(data.error || 'Ошибка сохранения');
@@ -252,6 +287,35 @@ export default function Settings() {
                     )}
                     Сохранить cookies
                   </button>
+
+                  {/* X-FP-Token section */}
+                  <div className="mt-4 pt-4 border-t border-gray-200">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
+                      X-FP-Token (fingerprint)
+                    </label>
+                    <p className="text-xs text-gray-500 mb-2">
+                      DevTools → Network → любой запрос к editor-api → Headers → X-FP-Token
+                    </p>
+                    <input
+                      type="text"
+                      value={fpTokenInput}
+                      onChange={(e) => setFpTokenInput(e.target.value)}
+                      placeholder="19cf8014944:1aebbe607b2e4cda:3076d96:..."
+                      className="w-full p-3 border border-gray-300 rounded-lg font-mono text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    />
+                    <button
+                      onClick={handleSaveFpToken}
+                      disabled={saving === 'fp-token'}
+                      className="mt-2 flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                    >
+                      {saving === 'fp-token' ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Upload className="w-4 h-4" />
+                      )}
+                      Сохранить FP-Token
+                    </button>
+                  </div>
                 </div>
               </div>
             )}
