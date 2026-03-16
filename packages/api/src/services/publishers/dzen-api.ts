@@ -16,6 +16,7 @@
 import fs from 'fs';
 import path from 'path';
 import https from 'https';
+import http2 from 'http2';
 import { ArticleContent, CoverImage } from '@content-pipeline/shared';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -228,8 +229,8 @@ async function uploadImage(
 
   console.log(`   📦 Image size: ${(imageBuffer.length / 1024).toFixed(1)} KB, type: ${contentType}`);
 
-  // Use https.request for reliable binary upload (Node.js fetch/undici has UND_ERR_SOCKET issues)
-  const boundary = '----DzenUpload' + Math.random().toString(36).substring(2);
+  // Build multipart body
+  const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
   
   const preamble = Buffer.from(
     `--${boundary}\r\n` +
@@ -240,41 +241,67 @@ async function uploadImage(
   const body = Buffer.concat([preamble, imageBuffer, epilogue]);
   
   const uploadPath = `/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
-  
+
+  // Use HTTP/2 (dzen.ru requires it — HTTP/1.1 gets "socket hang up")
   const data = await new Promise<any>((resolve, reject) => {
-    const req = https.request(
-      {
-        hostname: 'dzen.ru',
-        path: uploadPath,
-        method: 'POST',
-        headers: {
-          'Content-Type': `multipart/form-data; boundary=${boundary}`,
-          'Content-Length': body.length,
-          'Cookie': cookieHeader,
-          'X-Csrf-Token': csrfToken,
-          'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`,
-          'Origin': BASE_URL,
-          'User-Agent': 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-        },
-      },
-      (res) => {
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk) => chunks.push(chunk));
-        res.on('end', () => {
-          const responseBody = Buffer.concat(chunks).toString('utf-8');
-          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-            try {
-              resolve(JSON.parse(responseBody));
-            } catch {
-              reject(new Error(`Invalid JSON response: ${responseBody.substring(0, 200)}`));
-            }
-          } else {
-            reject(new Error(`Image upload failed: ${res.statusCode} ${responseBody.substring(0, 300)}`));
-          }
-        });
+    const client = http2.connect(BASE_URL);
+    client.on('error', (err) => {
+      reject(new Error(`HTTP/2 connection error: ${err.message}`));
+    });
+
+    const headers: http2.OutgoingHttpHeaders = {
+      ':method': 'POST',
+      ':path': uploadPath,
+      'content-type': `multipart/form-data; boundary=${boundary}`,
+      'content-length': body.length,
+      'cookie': cookieHeader,
+      'x-csrf-token': csrfToken,
+      'origin': BASE_URL,
+      'referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`,
+      'user-agent': USER_AGENT,
+      'accept': '*/*',
+      'accept-language': 'en-US,en;q=0.9,ru;q=0.8',
+      'accept-encoding': 'gzip, deflate, br',
+      'sec-fetch-dest': 'empty',
+      'sec-fetch-mode': 'cors',
+      'sec-fetch-site': 'same-origin',
+      'sec-ch-ua': '"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+      'sec-ch-ua-mobile': '?0',
+      'sec-ch-ua-platform': '"Linux"',
+    };
+
+    const req = client.request(headers);
+    
+    let status = 0;
+    const chunks: Buffer[] = [];
+
+    req.on('response', (responseHeaders) => {
+      status = responseHeaders[':status'] as number || 0;
+    });
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      const responseBody = Buffer.concat(chunks).toString('utf-8');
+      client.close();
+
+      let parsed: any;
+      try {
+        parsed = JSON.parse(responseBody);
+      } catch {
+        reject(new Error(`Invalid JSON (status ${status}): ${responseBody.substring(0, 200)}`));
+        return;
       }
-    );
-    req.on('error', (err) => reject(new Error(`Network error uploading image: ${err.message}`)));
+
+      if (status >= 200 && status < 300) {
+        resolve(parsed);
+      } else {
+        reject(new Error(`Image upload failed: ${status} ${responseBody.substring(0, 300)}`));
+      }
+    });
+    req.on('error', (err) => {
+      client.close();
+      reject(new Error(`Network error uploading image: ${err.message}`));
+    });
+    
     req.write(body);
     req.end();
   });
