@@ -279,8 +279,9 @@ async function uploadImage(
   
   // Build curl args — uses OpenSSL TLS (different fingerprint from Node.js)
   const curlArgs = [
-    '-s', '-S',                      // silent but show errors
+    '-v',                            // verbose — show TLS handshake details
     '--max-time', '60',              // timeout 60s
+    '--http1.1',                     // Force HTTP/1.1 (matches browser HAR)
     '-X', 'POST',
     '-F', `file=@${tmpFile};type=${contentType};filename=${filename}`,
   ];
@@ -294,18 +295,20 @@ async function uploadImage(
   curlArgs.push(uploadUrl);
   
   console.log(`   🔧 Upload URL: ${uploadUrl}`);
-  console.log(`   🔧 Using curl (OpenSSL TLS, different fingerprint from Node.js)`);
+  console.log(`   🔧 Using curl -v --http1.1 (verbose, forced HTTP/1.1)`);
   
   let responseBody: string;
   try {
     const { stdout, stderr } = await execFileAsync('curl', curlArgs, { maxBuffer: 10 * 1024 * 1024 });
-    if (stderr) console.log(`   🔧 curl stderr: ${stderr.substring(0, 200)}`);
+    // curl -v outputs connection info to stderr
+    if (stderr) console.log(`   🔧 curl verbose:\n${stderr.substring(0, 1500)}`);
     responseBody = stdout;
     console.log(`   📄 Response body (first 500 chars): ${responseBody.substring(0, 500)}`);
   } catch (curlErr: any) {
-    console.log(`   ❌ curl failed: ${curlErr.message?.substring(0, 300)}`);
-    console.log(`   ❌ curl stderr: ${curlErr.stderr?.substring(0, 300)}`);
-    throw new Error(`Network error uploading image via curl: ${curlErr.message}`);
+    console.log(`   ❌ curl failed: ${curlErr.message?.substring(0, 200)}`);
+    // With -v, stderr contains the TLS handshake and connection details
+    console.log(`   ❌ curl verbose output:\n${curlErr.stderr?.substring(0, 2000)}`);
+    throw new Error(`Network error uploading image via curl: ${curlErr.stderr?.substring(0, 300) || curlErr.message}`);
   } finally {
     // Clean up temp file
     try { fs.unlinkSync(tmpFile); } catch {}
