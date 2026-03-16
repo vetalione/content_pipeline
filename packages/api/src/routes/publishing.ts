@@ -102,6 +102,19 @@ publishingRouter.post('/:articleId/publish', async (req, res, next) => {
   }
 });
 
+// Reset ALL publication records for ALL articles
+publishingRouter.post('/reset-all/all-platforms', async (req, res, next) => {
+  try {
+    const result = await prisma.publication.deleteMany({});
+    res.json({ 
+      success: true, 
+      message: `Deleted ${result.count} publication records. All articles can now be republished.`
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Reset publication status for republishing
 publishingRouter.post('/:articleId/reset/:platform', async (req, res, next) => {
   try {
