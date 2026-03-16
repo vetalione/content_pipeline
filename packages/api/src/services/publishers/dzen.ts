@@ -53,6 +53,7 @@ const DZEN_STATE_FILE = path.join(SESSIONS_DIR, 'dzen-state.json');
 // Timeouts
 const NAVIGATION_TIMEOUT = 60000;  // 60 seconds for slow pages
 const ACTION_TIMEOUT = 15000;      // 15 seconds for actions
+const EDITOR_LOAD_TIMEOUT = 45000; // 45 seconds for Draft.js editor to load (SPA is slow)
 const UPLOAD_TIMEOUT = 60000;
 
 interface DzenPublishResult {
@@ -363,6 +364,59 @@ async function isLoggedIn(page: Page): Promise<boolean> {
 }
 
 /**
+ * Wait for Draft.js editor to become ready with progressive retries.
+ * The editor SPA can take 10-30+ seconds to fully load.
+ */
+async function waitForEditorReady(page: Page, timeoutMs = EDITOR_LOAD_TIMEOUT): Promise<boolean> {
+  const editorSelectors = [
+    '.public-DraftEditor-content[contenteditable="true"]',
+    '[contenteditable="true"][role="textbox"]',
+    '[data-contents="true"]',
+  ];
+  const startTime = Date.now();
+  const pollInterval = 2000; // check every 2s
+
+  console.log(`   ⏳ Waiting for Draft.js editor (up to ${timeoutMs / 1000}s)...`);
+
+  // First: wait for network to settle — SPA makes many API calls before rendering editor
+  try {
+    console.log('   ⏳ Waiting for networkidle (SPA API calls to finish)...');
+    await page.waitForLoadState('networkidle', { timeout: Math.min(timeoutMs, 30000) });
+    console.log('   ✅ Network is idle');
+  } catch {
+    console.log('   ⚠ networkidle timed out, continuing with polling...');
+  }
+
+  while (Date.now() - startTime < timeoutMs) {
+    for (const sel of editorSelectors) {
+      const el = await page.$(sel);
+      if (el) {
+        console.log(`   ✅ Editor element found: ${sel}`);
+        return true;
+      }
+    }
+    // Log progress every poll
+    const elapsed = Math.round((Date.now() - startTime) / 1000);
+    console.log(`   … ${elapsed}s elapsed, editor not rendered yet (URL: ${page.url()})`);
+    await page.waitForTimeout(pollInterval);
+  }
+
+  // Final attempt: dump page info for debugging
+  console.log('   ❌ Editor not found after timeout. Debug info:');
+  console.log(`   URL: ${page.url()}`);
+  console.log(`   Title: ${await page.title()}`);
+  try {
+    const bodySnippet = await page.evaluate(() => {
+      const body = document.body;
+      return body ? body.innerHTML.substring(0, 1000) : '(no body)';
+    });
+    console.log(`   Body snippet: ${bodySnippet.substring(0, 500)}`);
+  } catch {}
+  await takeScreenshot(page, 'editor-not-found');
+  return false;
+}
+
+/**
  * Navigate to Dzen editor and create new article
  * Real user flow:
  * 1. Go to dzen.ru
@@ -383,18 +437,15 @@ async function navigateToEditor(page: Page): Promise<boolean> {
   ]) {
     try {
       console.log(`   Trying direct editor URL: ${directUrl}`);
-      await page.goto(directUrl, { waitUntil: 'load', timeout: NAVIGATION_TIMEOUT });
-      await page.waitForTimeout(2000);
+      await page.goto(directUrl, { waitUntil: 'domcontentloaded', timeout: NAVIGATION_TIMEOUT });
       const afterGoto = page.url();
       // If redirected to login page — session is expired, no point trying more URLs
       if (afterGoto.includes('passport') || afterGoto.includes('login')) {
         console.log('   ⚠ Redirected to login — session expired');
         break;
       }
-      const editor = await page.$('.public-DraftEditor-content, [contenteditable="true"]');
-      if (editor) {
+      if (await waitForEditorReady(page, 20000)) {
         console.log('✅ Editor found via direct URL');
-        await page.waitForTimeout(1000);
         await closeModals(page);
         return true;
       }
@@ -522,12 +573,10 @@ async function navigateToEditor(page: Page): Promise<boolean> {
     console.log(`   Final URL: ${currentUrl}`);
     
     if (currentUrl.includes('/editor')) {
-      console.log('✅ Reached editor page');
+      console.log('✅ Reached editor page via menu');
       
-      try {
-        await page.waitForSelector('.public-DraftEditor-content[contenteditable="true"]', {
-          timeout: ACTION_TIMEOUT
-        });
+      // Wait for Draft.js editor with generous timeout — SPA loads slowly
+      if (await waitForEditorReady(page)) {
         console.log('✅ Draft.js editor loaded');
         
         // CRITICAL: Close help popup immediately after editor loads
@@ -537,43 +586,12 @@ async function navigateToEditor(page: Page): Promise<boolean> {
         await page.waitForTimeout(500);
         
         return true;
-      } catch {
-        const editor = await page.$('[contenteditable="true"]');
-        if (editor) {
-          console.log('✅ Found contenteditable editor');
-          await page.waitForTimeout(1000);
-          await closeModals(page);
-          return true;
-        }
       }
-    }
-    
-    // Fallback: Try known direct URLs
-    console.log('   ⚠ Editor not found via menu, trying direct URLs...');
-    const editorUrls = [
-      'https://dzen.ru/profile/editor/new',
-      'https://dzen.ru/editor/new'
-    ];
-    
-    for (const url of editorUrls) {
-      try {
-        console.log(`   Trying: ${url}`);
-        await page.goto(url, { 
-          waitUntil: 'networkidle',
-          timeout: NAVIGATION_TIMEOUT 
-        });
-        await page.waitForTimeout(2000);
-        
-        const editor = await page.$('.public-DraftEditor-content, [contenteditable="true"]');
-        if (editor) {
-          console.log('✅ Editor found via direct URL');
-          return true;
-        }
-        
-        console.log(`   Redirected to: ${page.url()}`);
-      } catch (e: any) {
-        console.log(`   Failed: ${e.message?.substring(0, 50)}`);
-      }
+      
+      // Editor page reached but DOM never appeared — log for debugging
+      console.log('   ⚠ Reached /editor URL but Draft.js editor DOM never loaded');
+    } else {
+      console.log(`   ⚠ Menu navigation did not reach /editor. Current URL: ${currentUrl}`);
     }
     
   } catch (error: any) {
@@ -1377,17 +1395,9 @@ export async function publishToDzen(
     // Set default timeout
     page.setDefaultTimeout(NAVIGATION_TIMEOUT);
     
-    // Navigate to Dzen - use 'load' instead of 'networkidle' which can timeout
-    console.log('🌐 Navigating to dzen.ru...');
-    await page.goto('https://dzen.ru/', { 
-      waitUntil: 'load',
-      timeout: NAVIGATION_TIMEOUT 
-    });
-    
-    // Wait a bit for JavaScript to initialize
-    await page.waitForTimeout(2000);
-    
-    // Check if logged in
+    // Check if logged in by inspecting cookies (no extra navigation needed —
+    // navigateToEditor will go to dzen.ru itself)
+    console.log('🔑 Checking auth cookies...');
     if (!await isLoggedIn(page)) {
       await saveContext(context);
       return {
