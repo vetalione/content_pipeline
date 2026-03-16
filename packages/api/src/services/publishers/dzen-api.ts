@@ -15,7 +15,6 @@
 
 import fs from 'fs';
 import path from 'path';
-import https from 'https';
 import { ArticleContent, CoverImage } from '@content-pipeline/shared';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -265,75 +264,42 @@ async function uploadImage(
 
   console.log(`   📦 Image size: ${(imageBuffer.length / 1024).toFixed(1)} KB, type: ${contentType}`);
 
-  // Build multipart body
-  const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
-  
-  const preamble = Buffer.from(
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
-    `Content-Type: ${contentType}\r\n\r\n`
-  );
-  const epilogue = Buffer.from(`\r\n--${boundary}--\r\n`);
-  const body = Buffer.concat([preamble, imageBuffer, epilogue]);
-  
-  const uploadPath = `/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
+  const uploadUrl = `${BASE_URL}/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
   const editReferer = `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`;
 
-  // Use HTTPS/1.1 with full browser headers matching Chrome exactly
+  // Use fetch() with Blob — same HTTP client as CSRF/createDraft/publish (shared keep-alive pool)
+  const blob = new Blob([new Uint8Array(imageBuffer)], { type: contentType });
+  const formData = new FormData();
+  formData.append('file', blob, filename);
+
   const allHeaders = browserHeaders(cookieHeader, csrfToken, editReferer);
+  // Remove Content-Type — fetch sets it automatically with correct boundary for FormData
+  // Remove Accept-Encoding — let fetch handle decompression
+  delete allHeaders['Accept-Encoding'];
   
-  const fpToken = loadFpToken();
-  console.log(`   🔧 FP-Token: ${fpToken ? fpToken.substring(0, 20) + '...' : 'MISSING'}`);
-  console.log(`   🔧 Cookie: ${cookieHeader.substring(0, 60)}...`);
-  console.log(`   🔧 Upload path: ${uploadPath}`);
+  console.log(`   🔧 Upload URL: ${uploadUrl}`);
+  console.log(`   🔧 Using fetch() with FormData (same connection pool as CSRF/draft)`);
   
-  const requestHeaders = {
-    ...allHeaders,
-    'Content-Type': `multipart/form-data; boundary=${boundary}`,
-    'Content-Length': body.length,
-  };
-  console.log(`   🔧 Request headers: ${JSON.stringify(Object.keys(requestHeaders))}`);
-  
-  const data = await new Promise<any>((resolve, reject) => {
-    const req = https.request(
-      {
-        hostname: 'dzen.ru',
-        path: uploadPath,
-        method: 'POST',
-        headers: requestHeaders,
-      },
-      (res) => {
-        console.log(`   📡 Response status: ${res.statusCode} ${res.statusMessage}`);
-        console.log(`   📡 Response headers: ${JSON.stringify(res.headers).substring(0, 500)}`);
-        const chunks: Buffer[] = [];
-        res.on('data', (chunk) => chunks.push(chunk));
-        res.on('end', () => {
-          const responseBody = Buffer.concat(chunks).toString('utf-8');
-          console.log(`   📄 Response body (first 500 chars): ${responseBody.substring(0, 500)}`);
-          if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
-            try {
-              resolve(JSON.parse(responseBody));
-            } catch {
-              reject(new Error(`Invalid JSON response: ${responseBody.substring(0, 200)}`));
-            }
-          } else {
-            reject(new Error(`Image upload failed: ${res.statusCode} ${responseBody.substring(0, 500)}`));
-          }
-        });
-      }
-    );
-    req.on('error', (err) => {
-      console.log(`   ❌ Request error event: ${err.message}`);
-      console.log(`   ❌ Error code: ${(err as any).code || 'none'}`);
-      reject(new Error(`Network error uploading image: ${err.message}`));
-    });
-    req.setTimeout(30000, () => {
-      console.log(`   ⏰ Request timed out after 30s`);
-      req.destroy(new Error('Image upload timed out after 30s'));
-    });
-    req.write(body);
-    req.end();
+  const res = await fetch(uploadUrl, {
+    method: 'POST',
+    headers: allHeaders,
+    body: formData,
   });
+  
+  console.log(`   📡 Response status: ${res.status} ${res.statusText}`);
+  const responseBody = await res.text();
+  console.log(`   📄 Response body (first 500 chars): ${responseBody.substring(0, 500)}`);
+  
+  if (!res.ok) {
+    throw new Error(`Image upload failed: ${res.status} ${responseBody.substring(0, 500)}`);
+  }
+  
+  let data: any;
+  try {
+    data = JSON.parse(responseBody);
+  } catch {
+    throw new Error(`Invalid JSON response: ${responseBody.substring(0, 200)}`);
+  }
   
   const imageId = data.id || data.imageId || data._id;
   if (!imageId) {
