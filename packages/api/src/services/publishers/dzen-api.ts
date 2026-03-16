@@ -222,35 +222,28 @@ async function uploadImage(
 
   console.log(`   📦 Image size: ${(imageBuffer.length / 1024).toFixed(1)} KB, type: ${contentType}`);
 
-  // Build multipart form data manually (Node.js compatible)
-  const boundary = '----DzenUpload' + Math.random().toString(36).substring(2);
-  const parts: Buffer[] = [];
+  // Use FormData + Blob for proper multipart upload (Node.js 18+)
+  const formData = new FormData();
+  const blob = new Blob([new Uint8Array(imageBuffer)], { type: contentType });
+  formData.append('file', blob, filename);
   
-  // File part
-  parts.push(Buffer.from(
-    `--${boundary}\r\n` +
-    `Content-Disposition: form-data; name="file"; filename="${filename}"\r\n` +
-    `Content-Type: ${contentType}\r\n\r\n`
-  ));
-  parts.push(imageBuffer);
-  parts.push(Buffer.from(`\r\n--${boundary}--\r\n`));
+  const url = `${BASE_URL}/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`;
   
-  const body = Buffer.concat(parts);
-  
-  const res = await fetch(
-    `${BASE_URL}/editor-api/v2/add-image?publicationId=${publicationId}&publisherId=${PUBLISHER_ID}&clientRid=${clientRid()}`,
-    {
+  let res: Response;
+  try {
+    res = await fetch(url, {
       method: 'POST',
       headers: {
-        'Content-Type': `multipart/form-data; boundary=${boundary}`,
         'Cookie': cookieHeader,
         'X-Csrf-Token': csrfToken,
         'Referer': `${BASE_URL}/profile/editor/id/${PUBLISHER_ID}/${publicationId}/edit`,
         'Origin': BASE_URL,
       },
-      body,
-    }
-  );
+      body: formData,
+    });
+  } catch (fetchErr: any) {
+    throw new Error(`Network error uploading image: ${fetchErr.cause?.code || fetchErr.cause?.message || fetchErr.message}`);
+  }
   
   if (!res.ok) {
     const text = await res.text();
