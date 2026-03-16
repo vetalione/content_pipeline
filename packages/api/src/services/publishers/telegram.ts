@@ -106,12 +106,21 @@ function getPublicBaseUrl(): string | null {
   return null;
 }
 
-/** Convert a local path (/images/..., /covers/...) to a public URL */
+/** Convert a local path (/images/..., /covers/...) or full filesystem path to a public URL */
 function getPublicImageUrl(localPath: string): string | null {
   const baseUrl = getPublicBaseUrl();
   if (!baseUrl) return null;
   if (localPath.startsWith('/images/') || localPath.startsWith('/covers/')) {
     return `${baseUrl}${localPath}`;
+  }
+  // Full filesystem path — extract /images/... or /covers/... suffix
+  const storageBase = process.env.STORAGE_PATH || process.cwd();
+  if (localPath.startsWith(storageBase)) {
+    const relative = localPath.substring(storageBase.length);
+    const normalized = relative.startsWith('/') ? relative : `/${relative}`;
+    if (normalized.startsWith('/images/') || normalized.startsWith('/covers/')) {
+      return `${baseUrl}${normalized}`;
+    }
   }
   return null;
 }
