@@ -190,7 +190,7 @@ async function openEditor(cookieHeader: string): Promise<EditorSession> {
   let responseCode = data?.payload?.[0];
 
   // Handle code-3 access-check gate: VK wants IP confirmation.
-  // Extract ip_h + security_token from payload[1], retry with those added.
+  // Flow: extract credentials → confirm via al_login.php → retry with ip_h
   if (responseCode === '3' || responseCode === 3) {
     const gate = data.payload[1];
     if (!Array.isArray(gate) || gate.length < 3) {
@@ -202,27 +202,27 @@ async function openEditor(cookieHeader: string): Promise<EditorSession> {
     // Values come wrapped in literal quotes: "\"abc\"" → abc
     const stripQuotes = (s: string) => s.replace(/^"|"$/g, '');
     const ipH = stripQuotes(gate[0]);
-    const securityToken = stripQuotes(gate[2]);
+    const to = stripQuotes(gate[1]);
+    const lgH = stripQuotes(gate[2]);
 
-    console.log(`   🔐 Code-3 access-check gate — retrying with ip_h + _security_token`);
+    console.log(`   🔐 Code-3 access-check gate detected`);
     console.log(`   📋 ip_h: ${ipH}`);
+    console.log(`   📋 to: ${to}`);
 
-    // Retry with security params
-    const retryParams = {
-      ...baseParams,
-      ip_h: ipH,
-      _security_token: securityToken,
-    };
+    // Step 1: Confirm the security check via al_login.php
+    await resolveSecurityCheck(cookieHeader, ipH, to, lgH);
 
-    data = await postOpenEditor(cookieHeader, referer, retryParams);
+    // Step 2: Retry open_editor with ip_h
+    console.log(`   🔄 Retrying open_editor with ip_h...`);
+    data = await postOpenEditor(cookieHeader, referer, { ...baseParams, ip_h: ipH });
     responseCode = data?.payload?.[0];
 
     if (responseCode === '3' || responseCode === 3) {
       const raw = JSON.stringify(data).substring(0, 500);
       throw new Error(
-        `VK returned code-3 again after security retry. ` +
-        `Session cookies may be expired. Re-upload fresh cookies. ` +
-        `Response: ${raw}`
+        `VK returned code-3 again after security check confirmation. ` +
+        `Session cookies may be expired or VK requires phone verification. ` +
+        `Re-upload fresh cookies. Response: ${raw}`
       );
     }
   }
@@ -277,6 +277,157 @@ async function postOpenEditor(
   }
 
   return (await res.json()) as any;
+}
+
+/**
+ * Resolve VK's code-3 IP security check.
+ *
+ * When cookies are used from a new IP, VK requires confirmation via al_login.php.
+ * VK's browser JS shows a security check modal; we replicate that flow with HTTP.
+ *
+ * Flow:
+ * 1. POST al_login.php with act=security_check to load the check
+ * 2. POST al_login.php again to confirm (auto-approve the IP)
+ * 3. If phone verification is required, throw — can't automate that
+ */
+async function resolveSecurityCheck(
+  cookieHeader: string,
+  ipH: string,
+  to: string,
+  lgH: string,
+): Promise<void> {
+  console.log(`   🔐 Confirming security check via al_login.php...`);
+
+  // Step 1: Load security check page
+  const loadRes = await fetch('https://vk.com/al_login.php', {
+    method: 'POST',
+    headers: vkBrowserHeaders(cookieHeader, 'https://vk.com/'),
+    body: new URLSearchParams({
+      act: 'security_check',
+      al: '1',
+      al_page: '3',
+      hash: ipH,
+      to,
+      lg_h: lgH,
+    }),
+  });
+
+  const loadText = await loadRes.text();
+  console.log(`   📋 Security check load: ${loadRes.status}, ${loadText.length} chars`);
+  console.log(`   📋 Preview: ${loadText.substring(0, 500)}`);
+
+  // Try to parse as JSON (VK AJAX response)
+  let loadJson: any = null;
+  try {
+    loadJson = JSON.parse(loadText);
+    const code = loadJson?.payload?.[0];
+    console.log(`   📋 Security check response code: ${code}`);
+    if (code === 0) {
+      console.log(`   ✅ Security check auto-confirmed (code 0)`);
+      return;
+    }
+  } catch {
+    // HTML response
+  }
+
+  // Check if phone verification is required (can't automate)
+  if (loadText.includes('security_code') || loadText.includes('enter_code') ||
+      loadText.includes('Введите код') || loadText.includes('Подтвердите')) {
+    console.log(`   📋 Full response for debugging: ${loadText.substring(0, 2000)}`);
+  }
+
+  // Step 2: Try to confirm the check
+  console.log(`   🔐 Sending security confirmation...`);
+  const confirmRes = await fetch('https://vk.com/al_login.php', {
+    method: 'POST',
+    headers: vkBrowserHeaders(cookieHeader, 'https://vk.com/login?act=security_check'),
+    body: new URLSearchParams({
+      act: 'security_check',
+      al: '1',
+      hash: ipH,
+      to,
+      lg_h: lgH,
+      approve: '1',
+    }),
+  });
+
+  const confirmText = await confirmRes.text();
+  console.log(`   📋 Confirm response: ${confirmRes.status}, ${confirmText.length} chars`);
+  console.log(`   📋 Preview: ${confirmText.substring(0, 500)}`);
+
+  try {
+    const confirmJson = JSON.parse(confirmText);
+    const code = confirmJson?.payload?.[0];
+    console.log(`   📋 Confirm code: ${code}`);
+    if (code === 0) {
+      console.log(`   ✅ Security check confirmed`);
+      return;
+    }
+  } catch {
+    // Not JSON
+  }
+
+  // Step 3: Alternative — try via /login page GET (browser-style navigation)
+  console.log(`   🔐 Trying GET /login?act=security_check...`);
+  const loginRes = await fetch(
+    `https://vk.com/login?act=security_check&to=${encodeURIComponent(to)}&hash=${encodeURIComponent(ipH)}`,
+    {
+      headers: {
+        'Cookie': cookieHeader,
+        'User-Agent': USER_AGENT,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
+      },
+      redirect: 'follow',
+    },
+  );
+
+  const loginHtml = await loginRes.text();
+  console.log(`   📋 Login page: ${loginRes.status}, ${loginHtml.length} chars, url: ${loginRes.url}`);
+
+  // Look for the approve/confirm form action
+  const approveMatch = loginHtml.match(/action="([^"]*security_check[^"]*)"/);
+  if (approveMatch) {
+    console.log(`   📋 Found form action: ${approveMatch[1]}`);
+  }
+
+  // Extract any hidden form fields (hash, lg_h, etc.)
+  const hashMatch = loginHtml.match(/name="hash"\s+value="([^"]+)"/);
+  const codeMatch = loginHtml.match(/name="code"/);
+
+  if (codeMatch) {
+    throw new Error(
+      `VK requires phone/SMS code verification for this IP. ` +
+      `Cannot automate this step. To fix: open https://vk.com from the Railway server ` +
+      `(or use the same IP/VPN when exporting cookies).`
+    );
+  }
+
+  // Try to POST the approve form
+  if (hashMatch) {
+    console.log(`   🔐 Submitting approve form with hash: ${hashMatch[1]}`);
+    const approveRes = await fetch('https://vk.com/login?act=security_check', {
+      method: 'POST',
+      headers: {
+        'Cookie': cookieHeader,
+        'User-Agent': USER_AGENT,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Referer': loginRes.url,
+      },
+      body: new URLSearchParams({
+        hash: hashMatch[1],
+        to,
+        al: '1',
+      }),
+      redirect: 'follow',
+    });
+    console.log(`   📋 Approve result: ${approveRes.status}, url: ${approveRes.url}`);
+    const approveText = await approveRes.text();
+    console.log(`   📋 Approve preview: ${approveText.substring(0, 300)}`);
+  }
+
+  // We've done our best — the retry in openEditor will tell if it worked
+  console.log(`   📋 Security check flow completed, proceeding to retry...`);
 }
 
 // ── Photo Upload ───────────────────────────────────────────────────────────────
