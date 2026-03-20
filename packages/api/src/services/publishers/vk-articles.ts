@@ -242,11 +242,12 @@ function extractHashFromPayload(body: string): { hash: string | null; code: stri
 /**
  * Extract the VK articles editor CSRF hash using Playwright.
  *
- * Phased approach:
  * Phase 1: CDP cookies → navigate to blank.php (completes login verification chain)
- * Phase 2: In-page AJAX from blank.php (session is now verified, avoids challenge)
- * Phase 3: If code 3 → navigate to login.vk.com for access-check resolution → retry AJAX
- * Phase 4: Navigate to article editor URL as last resort (may trigger challenge.html)
+ * Phase 2: In-page AJAX from blank.php (best case — hash returned directly)
+ * Phase 3: Navigate to editor URL → handle challenge.html → retry AJAX
+ *
+ * VK's code 3 for al_articles.php is resolved by passing challenge.html,
+ * NOT by the login.vk.com redirect chain (that only resolves page access).
  */
 async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; cookies: string }> {
   const groupId = getGroupId();
@@ -256,6 +257,13 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
 
   const pwCookies = buildPlaywrightCookies();
   console.log(`   🍪 Prepared ${pwCookies.length} cookies for Playwright`);
+
+  const screenshotsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'vk-screenshots')
+    : '/tmp/vk-screenshots';
+  if (!fs.existsSync(screenshotsDir)) {
+    fs.mkdirSync(screenshotsDir, { recursive: true });
+  }
 
   const browser = await chromium.launch({
     headless: true,
@@ -302,11 +310,21 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
 
     let capturedHash: string | null = null;
 
+    // Intercept al_articles.php responses globally for hash capture
+    page.on('response', async (response) => {
+      if (!response.url().includes('al_articles.php')) return;
+      try {
+        const body = await response.text();
+        const parsed = extractHashFromPayload(body);
+        if (parsed.hash && !capturedHash) {
+          capturedHash = parsed.hash;
+          console.log(`   🔑 Hash from network intercept: ${capturedHash}`);
+        }
+      } catch {}
+    });
+
     // ── Phase 1: Navigate to blank.php to establish verified session ──
-    // This completes VK's login redirect chain (blank.php → login.vk.com → login.php → blank.php)
-    // which sets additional cookies needed for API calls.
     console.log(`\n   ── Phase 1: Establish session via blank.php ──`);
-    let sessionEstablished = false;
     try {
       await page.goto('https://vk.com/blank.php', {
         waitUntil: 'domcontentloaded',
@@ -314,160 +332,63 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
       });
       const url = page.url();
       console.log(`   📄 Landed: ${url}`);
-      sessionEstablished = url.includes('vk.com') && !url.includes('login.vk.com');
+
+      if (url.includes('login.vk.com') || !url.includes('vk.com')) {
+        throw new Error(`Session not established — landed on: ${url}`);
+      }
     } catch (err: any) {
       console.log(`   ⚠️ blank.php: ${err.message?.substring(0, 150)}`);
-    }
-
-    if (!sessionEstablished) {
-      // Capture cookies for diagnostics even on failure
-      const bc = await context.cookies('https://vk.com');
-      const cs = bc.map(c => `${c.name}=${c.value}`).join('; ');
-      throw new Error(
-        `Could not establish VK session — blank.php navigation failed. ` +
-        `Landed on: ${page.url()}. Cookies may be expired or invalid.`
-      );
+      throw new Error('Could not establish VK session. Cookies may be expired.');
     }
 
     // ── Phase 2: In-page AJAX from blank.php ──
-    // The session is now verified (login chain completed). AJAX calls from this page
-    // use the full verified cookie set. This avoids the challenge.html trigger that
-    // only appears on page NAVIGATION to the editor URL.
     console.log(`\n   ── Phase 2: In-page AJAX from blank.php ──`);
 
-    const ajaxResult = await page.evaluate(async (params) => {
-      try {
-        const body = new URLSearchParams({
-          act: 'edit',
-          al: '1',
-          article_id: '0',
-          article_owner_id: `-${params.groupId}`,
-        });
-        const res = await fetch('/al_articles.php', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Requested-With': 'XMLHttpRequest',
-          },
-          body,
-          credentials: 'include',
-        });
-        return { status: res.status, body: await res.text() };
-      } catch (e: any) {
-        return { error: e.message };
-      }
-    }, { groupId });
+    const ajaxCall = async (): Promise<{ status: number; body: string } | { error: string }> => {
+      return page.evaluate(async (gid) => {
+        try {
+          const body = new URLSearchParams({
+            act: 'edit',
+            al: '1',
+            article_id: '0',
+            article_owner_id: `-${gid}`,
+          });
+          const res = await fetch('/al_articles.php', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/x-www-form-urlencoded',
+              'X-Requested-With': 'XMLHttpRequest',
+            },
+            body,
+            credentials: 'include',
+          });
+          return { status: res.status, body: await res.text() };
+        } catch (e: any) {
+          return { error: e.message };
+        }
+      }, groupId);
+    };
 
-    if (ajaxResult.error) {
+    const ajaxResult = await ajaxCall();
+
+    if ('error' in ajaxResult) {
       console.log(`   ⚠️ AJAX error: ${ajaxResult.error}`);
     } else {
-      console.log(`   📡 AJAX: status=${ajaxResult.status}, ${ajaxResult.body?.length} bytes`);
-      const parsed = extractHashFromPayload(ajaxResult.body!);
+      console.log(`   📡 AJAX: status=${ajaxResult.status}, ${ajaxResult.body.length} bytes`);
+      const parsed = extractHashFromPayload(ajaxResult.body);
       console.log(`   📋 code=${parsed.code}, hash=${parsed.hash || 'N/A'}`);
       if (!parsed.hash) console.log(`   📋 payload: ${parsed.rawPayload}`);
-
       if (parsed.hash) {
         capturedHash = parsed.hash;
         console.log(`   ✅ Hash via in-page AJAX: ${capturedHash}`);
       }
     }
 
-    // ── Phase 3: If code 3, navigate to login.vk.com for access-check → retry ──
-    if (!capturedHash && ajaxResult.body) {
-      const initialParsed = extractHashFromPayload(ajaxResult.body);
-      if (initialParsed.code === '3' || initialParsed.code === 3) {
-        console.log(`\n   ── Phase 3: Resolve access-check via login.vk.com ──`);
-
-        // Extract access-check hash from code-3 payload
-        let acHash: string | null = null;
-        try {
-          const payload = JSON.parse(ajaxResult.body)?.payload?.[1];
-          if (Array.isArray(payload)) {
-            // Payload[0] is hash (may have surrounding quotes)
-            acHash = String(payload[0]).replace(/"/g, '');
-          }
-        } catch {}
-
-        if (acHash) {
-          console.log(`   🔑 Access-check hash (ip_h): ${acHash}`);
-
-          // Navigate to login.vk.com fast_return — same flow that blank.php uses
-          // This resolves the access check by going through VK's login verification
-          const verifyUrl = `https://login.vk.com/?role=fast_return&_origin=https://vk.com&ip_h=${encodeURIComponent(acHash)}&to=YmxhbmsucGhw`;
-          console.log(`   🔄 Navigating to login.vk.com for verification...`);
-
-          try {
-            await page.goto(verifyUrl, {
-              waitUntil: 'domcontentloaded',
-              timeout: 20_000,
-            });
-            console.log(`   📄 After verify: ${page.url()}`);
-
-            // If we're back on vk.com, the access check succeeded
-            if (page.url().includes('vk.com') && !page.url().includes('login.vk.com')) {
-              console.log(`   ✅ Access-check resolved! Retrying AJAX...`);
-              await sleep(1000);
-
-              const retryResult = await page.evaluate(async (params) => {
-                try {
-                  const body = new URLSearchParams({
-                    act: 'edit',
-                    al: '1',
-                    article_id: '0',
-                    article_owner_id: `-${params.groupId}`,
-                  });
-                  const res = await fetch('/al_articles.php', {
-                    method: 'POST',
-                    headers: {
-                      'Content-Type': 'application/x-www-form-urlencoded',
-                      'X-Requested-With': 'XMLHttpRequest',
-                    },
-                    body,
-                    credentials: 'include',
-                  });
-                  return { status: res.status, body: await res.text() };
-                } catch (e: any) {
-                  return { error: e.message };
-                }
-              }, { groupId });
-
-              if (retryResult.body) {
-                const retryParsed = extractHashFromPayload(retryResult.body);
-                console.log(`   📋 Post-verify: code=${retryParsed.code}, hash=${retryParsed.hash || 'N/A'}`);
-                if (!retryParsed.hash) console.log(`   📋 payload: ${retryParsed.rawPayload}`);
-                if (retryParsed.hash) {
-                  capturedHash = retryParsed.hash;
-                  console.log(`   ✅ Hash after access-check: ${capturedHash}`);
-                }
-              } else if (retryResult.error) {
-                console.log(`   ⚠️ Post-verify AJAX error: ${retryResult.error}`);
-              }
-            } else {
-              console.log(`   ⚠️ Still not on vk.com after verify: ${page.url()}`);
-            }
-          } catch (err: any) {
-            console.log(`   ⚠️ Verify navigation: ${err.message?.substring(0, 150)}`);
-          }
-        }
-      }
-    }
-
-    // ── Phase 4: Navigate to editor as last resort ──
+    // ── Phase 3: Navigate to editor → handle challenge → retry AJAX ──
+    // VK's code 3 for al_articles.php is ONLY resolved by passing challenge.html.
+    // The editor page loads, then VK's JS sees code 3 and redirects to challenge.
     if (!capturedHash) {
-      console.log(`\n   ── Phase 4: Navigate to editor (last resort) ──`);
-
-      // Intercept al_articles.php responses for hash capture
-      page.on('response', async (response) => {
-        if (!response.url().includes('al_articles.php')) return;
-        try {
-          const body = await response.text();
-          const parsed = extractHashFromPayload(body);
-          if (parsed.hash && !capturedHash) {
-            capturedHash = parsed.hash;
-            console.log(`   🔑 Hash from network intercept: ${capturedHash}`);
-          }
-        } catch {}
-      });
+      console.log(`\n   ── Phase 3: Navigate to editor + handle challenge ──`);
 
       const editorUrl = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
       console.log(`   📄 Opening editor: ${editorUrl}`);
@@ -477,39 +398,149 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
           waitUntil: 'domcontentloaded',
           timeout: 25_000,
         });
+        console.log(`   📄 Initial URL: ${page.url()}`);
 
-        const landedUrl = page.url();
-        console.log(`   📄 Landed: ${landedUrl}`);
-
-        // Handle challenge page
-        if (landedUrl.includes('challenge.html')) {
-          console.log(`   ⚠️ VK challenge page — attempting to handle...`);
-          try {
-            // Wait for any clickable element
-            await page.waitForSelector('button, input[type="submit"], a.flat_button', { timeout: 5_000 });
-            const buttons = await page.$$('button, input[type="submit"], a.flat_button');
-            for (const btn of buttons) {
-              const text = await btn.innerText().catch(() => '');
-              console.log(`   🔘 Button: "${text}"`);
-              if (text.match(/confirm|continue|proceed|подтвердить|продолжить|да|yes/i)) {
-                await btn.click();
-                console.log(`   ✅ Clicked: "${text}"`);
-                await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {});
-                console.log(`   📄 After challenge: ${page.url()}`);
-                break;
-              }
-            }
-          } catch {
-            console.log(`   ⚠️ No confirm button found on challenge page`);
+        // Wait for URL to settle — challenge.html redirect is CLIENT-SIDE JS,
+        // so it happens AFTER domcontentloaded. Poll until URL stabilizes.
+        let lastUrl = page.url();
+        for (let i = 0; i < 10; i++) {
+          await sleep(1000);
+          const currentUrl = page.url();
+          if (capturedHash) break; // Hash captured via network intercept
+          if (currentUrl !== lastUrl) {
+            console.log(`   📄 URL changed: ${currentUrl.substring(0, 120)}`);
+            lastUrl = currentUrl;
+          } else if (i >= 2) {
+            // URL stable for 2+ seconds
+            break;
           }
         }
 
-        // Wait for hash from network intercept
-        for (let i = 0; i < 20 && !capturedHash; i++) {
-          await sleep(500);
-        }
+        console.log(`   📄 Final URL: ${page.url()}`);
       } catch (err: any) {
         console.log(`   ⚠️ Editor nav: ${err.message?.substring(0, 150)}`);
+      }
+
+      // Check if hash was captured during editor load
+      if (capturedHash) {
+        console.log(`   ✅ Hash captured during editor navigation!`);
+      }
+
+      // Handle challenge page
+      if (!capturedHash && page.url().includes('challenge.html')) {
+        console.log(`\n   ── Challenge page detected! ──`);
+
+        // Take screenshot for diagnostics
+        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+        const screenshotPath = path.join(screenshotsDir, `vk-challenge_${timestamp}.png`);
+        try {
+          await page.screenshot({ path: screenshotPath, fullPage: true });
+          console.log(`   📸 Screenshot saved: ${screenshotPath}`);
+        } catch {}
+
+        // Read the page content for analysis
+        const pageInfo = await page.evaluate(() => {
+          const title = document.title;
+          const bodyText = document.body?.innerText?.substring(0, 1000) || '';
+          const forms = Array.from(document.querySelectorAll('form')).map(f => ({
+            action: f.action,
+            method: f.method,
+            inputs: Array.from(f.querySelectorAll('input')).map(i => ({
+              type: i.type, name: i.name, placeholder: i.placeholder, value: i.value
+            }))
+          }));
+          const buttons = Array.from(document.querySelectorAll('button, input[type="submit"], a.flat_button, .FlatButton')).map(b => ({
+            tag: b.tagName,
+            text: (b as HTMLElement).innerText?.trim() || '',
+            id: b.id,
+            className: b.className
+          }));
+          const iframes = Array.from(document.querySelectorAll('iframe')).map(f => f.src);
+          return { title, bodyText, forms, buttons, iframes };
+        });
+
+        console.log(`   📄 Title: "${pageInfo.title}"`);
+        console.log(`   📄 Body text: ${pageInfo.bodyText.substring(0, 300)}`);
+        console.log(`   📄 Forms: ${JSON.stringify(pageInfo.forms).substring(0, 500)}`);
+        console.log(`   📄 Buttons: ${JSON.stringify(pageInfo.buttons).substring(0, 500)}`);
+        if (pageInfo.iframes.length > 0) console.log(`   📄 Iframes: ${pageInfo.iframes.join(', ')}`);
+
+        // Try to auto-handle common challenge types:
+        // 1. Simple "confirm" / "this is me" button
+        let challengeResolved = false;
+        for (const btn of pageInfo.buttons) {
+          const text = btn.text.toLowerCase();
+          if (text.match(/confirm|this is me|continue|proceed|подтвердить|это я|продолжить|да|отправить|send|submit/)) {
+            console.log(`   🔘 Clicking: "${btn.text}" (${btn.tag})`);
+            try {
+              const selector = btn.id
+                ? `#${btn.id}`
+                : btn.tag === 'BUTTON'
+                  ? `button:has-text("${btn.text}")`
+                  : `input[type="submit"]`;
+              await page.click(selector, { timeout: 5_000 });
+              console.log(`   ✅ Clicked!`);
+
+              // Wait for navigation
+              await sleep(3000);
+              const postClickUrl = page.url();
+              console.log(`   📄 After click: ${postClickUrl}`);
+
+              if (!postClickUrl.includes('challenge.html')) {
+                challengeResolved = true;
+                console.log(`   ✅ Challenge resolved!`);
+              }
+            } catch (e: any) {
+              console.log(`   ⚠️ Click failed: ${e.message?.substring(0, 100)}`);
+            }
+            break;
+          }
+        }
+
+        // 2. If challenge has a form with phone/code input — log it for the user
+        if (!challengeResolved) {
+          for (const form of pageInfo.forms) {
+            for (const input of form.inputs) {
+              if (input.type === 'tel' || input.type === 'text' || input.name?.includes('code') || input.name?.includes('phone')) {
+                console.log(`   ⚠️ Challenge requires input: type=${input.type}, name=${input.name}, placeholder="${input.placeholder}"`);
+                console.log(`   ❌ Cannot auto-resolve: VK wants phone/code verification.`);
+                console.log(`   💡 Open vk.com in a browser on the same IP, resolve the challenge, then re-try.`);
+              }
+            }
+          }
+        }
+
+        // After challenge resolution, retry AJAX
+        if (challengeResolved) {
+          // Navigate back to blank.php for a clean AJAX context
+          try {
+            await page.goto('https://vk.com/blank.php', {
+              waitUntil: 'domcontentloaded',
+              timeout: 15_000,
+            });
+          } catch {}
+
+          if (page.url().includes('vk.com') && !page.url().includes('challenge') && !page.url().includes('login')) {
+            console.log(`   📡 Retrying AJAX after challenge...`);
+            await sleep(1000);
+            const retryResult = await ajaxCall();
+            if (!('error' in retryResult)) {
+              const parsed = extractHashFromPayload(retryResult.body);
+              console.log(`   📋 Post-challenge: code=${parsed.code}, hash=${parsed.hash || 'N/A'}`);
+              if (parsed.hash) {
+                capturedHash = parsed.hash;
+                console.log(`   ✅ Hash after challenge: ${capturedHash}`);
+              }
+            }
+          }
+        }
+
+        // Wait for hash from network intercept (editor may have loaded in background)
+        if (!capturedHash) {
+          for (let i = 0; i < 10 && !capturedHash; i++) {
+            await sleep(500);
+          }
+        }
       }
     }
 
@@ -522,9 +553,8 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
 
     if (!capturedHash) {
       throw new Error(
-        'Could not extract VK editor hash. All phases failed. ' +
-        'Check logs: likely VK challenge page requires human interaction, ' +
-        'or cookies are expired/invalid.'
+        'Could not extract VK editor hash. Likely VK challenge page requires human interaction. ' +
+        'Check screenshots in vk-screenshots/. Try: open vk.com on the same server IP to resolve the challenge.'
       );
     }
 
