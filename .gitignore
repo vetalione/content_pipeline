@@ -56,3 +56,4 @@ playwright/.cache/
 .env
 dzen.ru.har
 vk.com.har
+*.har
