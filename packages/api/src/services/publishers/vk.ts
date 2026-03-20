@@ -20,6 +20,7 @@ import {
   ArticleWithCover,
   resolveImagePath,
 } from './telegram';
+import { publishVkArticle, isVkSessionAvailable } from './vk-articles';
 
 // ── Config ─────────────────────────────────────────────────────────────────────
 
@@ -261,12 +262,26 @@ function buildWallText(title: string, content: ArticleContent): string {
   return text;
 }
 
+/** Short wall post with link to the full VK Article */
+function buildWallTextWithLink(title: string, content: ArticleContent, articleUrl: string): string {
+  const parts: string[] = [];
+  parts.push(`📰 ${title}`);
+  parts.push('');
+  if (content.teaser) {
+    parts.push(content.teaser);
+    parts.push('');
+  }
+  parts.push(`👉 Читать полностью: ${articleUrl}`);
+  return parts.join('\n');
+}
+
 // ── Main Entry Point ───────────────────────────────────────────────────────────
 
 /**
  * Publish article to VK:
- * 1. Uploads cover photo to VK
- * 2. Posts to group wall: cover + full formatted article text
+ * 1. If VK cookies available → create VK Article (rich text)
+ * 2. Upload cover photo for wall post
+ * 3. Post to group wall (short teaser + article link, or full text if no article)
  */
 export async function publishToVK(article: ArticleWithCover): Promise<{ url: string }> {
   const content = article.content as ArticleContent;
@@ -279,7 +294,23 @@ export async function publishToVK(article: ArticleWithCover): Promise<{ url: str
   console.log(`📰 Publishing to VK: "${title}"`);
   console.log('============================================================');
 
-  // 1. Upload cover photo to VK
+  // 1. Try to create VK Article (requires cookies from Settings)
+  let articleUrl: string | undefined;
+  if (isVkSessionAvailable()) {
+    try {
+      console.log('📝 Creating VK Article...');
+      const result = await publishVkArticle(article);
+      articleUrl = result.url;
+      console.log(`   ✅ VK Article: ${articleUrl}`);
+    } catch (err: any) {
+      console.warn(`   ⚠️ VK Article creation failed: ${err.message}`);
+      console.warn('   Continuing with wall post only...');
+    }
+  } else {
+    console.log('   ℹ️ VK cookies not found — wall post only (upload cookies in Settings for articles)');
+  }
+
+  // 2. Upload cover photo for wall post
   let photoAttachment: string | null = null;
   if (coverImage) {
     console.log('🖼️  Uploading cover to VK...');
@@ -287,14 +318,17 @@ export async function publishToVK(article: ArticleWithCover): Promise<{ url: str
     photoAttachment = await uploadPhotoToVK(coverSrc);
   }
 
-  // 2. Build wall post text
-  const message = buildWallText(title, content);
+  // 3. Build wall post text
+  const message = articleUrl
+    ? buildWallTextWithLink(title, content, articleUrl)
+    : buildWallText(title, content);
   console.log(`   📝 Wall text: ${message.length} chars`);
 
-  // 3. Post to VK wall
+  // 4. Post to VK wall
   console.log('📢 Posting to VK group wall...');
   const postUrl = await createWallPost(message, photoAttachment);
   console.log(`   ✅ VK wall post: ${postUrl}`);
 
-  return { url: postUrl };
+  // Return article URL if created, otherwise wall post URL
+  return { url: articleUrl || postUrl };
 }

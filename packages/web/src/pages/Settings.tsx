@@ -26,6 +26,19 @@ export default function Settings() {
         '5. Откройте DevTools (F12) → Network → любой запрос к editor-api',
         '6. Скопируйте значение заголовка X-FP-Token и вставьте ниже'
       ]
+    },
+    {
+      platform: 'vk',
+      name: 'ВКонтакте',
+      authenticated: false,
+      description: 'VK Статьи — полноценные статьи в группе (@group)',
+      instructions: [
+        '1. Откройте vk.com в браузере и войдите в аккаунт',
+        '2. Установите расширение "EditThisCookie" или "Cookie-Editor"',
+        '3. Экспортируйте все cookies как JSON',
+        '4. Вставьте JSON в поле ниже и нажмите "Сохранить"',
+        '5. Также убедитесь что VK_ACCESS_TOKEN и VK_GROUP_ID настроены'
+      ]
     }
   ]);
   
@@ -44,24 +57,34 @@ export default function Settings() {
   const checkAuthStatus = async () => {
     console.log('Checking auth status for API:', API_URL);
     try {
-      const response = await fetch(`${API_URL}/api/publishing/auth/dzen/status`, {
-        signal: AbortSignal.timeout(5000) // 5 second timeout
+      // Check Dzen
+      const dzenRes = await fetch(`${API_URL}/api/publishing/auth/dzen/status`, {
+        signal: AbortSignal.timeout(5000)
       });
-      console.log('Auth status response:', response.status);
-      if (!response.ok) throw new Error('API error');
-      const data = await response.json();
-      console.log('Auth status data:', data);
-      
-      setPlatforms(prev => prev.map(p => 
-        p.platform === 'dzen' 
-          ? { ...p, authenticated: data.data?.authenticated || false }
-          : p
-      ));
+      if (dzenRes.ok) {
+        const dzenData = await dzenRes.json();
+        setPlatforms(prev => prev.map(p => 
+          p.platform === 'dzen' 
+            ? { ...p, authenticated: dzenData.data?.authenticated || false }
+            : p
+        ));
+      }
+
+      // Check VK
+      const vkRes = await fetch(`${API_URL}/api/publishing/auth/vk/status`, {
+        signal: AbortSignal.timeout(5000)
+      });
+      if (vkRes.ok) {
+        const vkData = await vkRes.json();
+        setPlatforms(prev => prev.map(p => 
+          p.platform === 'vk' 
+            ? { ...p, authenticated: vkData.data?.authenticated || false }
+            : p
+        ));
+      }
     } catch (error) {
       console.error('Failed to check auth status:', error);
-      // Still show the page even if API fails
     } finally {
-      console.log('Setting loading to false');
       setLoading(false);
     }
   };
@@ -221,6 +244,9 @@ export default function Settings() {
                   {platform.platform === 'dzen' && (
                     <span className="text-xl font-bold text-orange-500">Д</span>
                   )}
+                  {platform.platform === 'vk' && (
+                    <span className="text-xl font-bold text-blue-500">VK</span>
+                  )}
                 </div>
                 <div>
                   <h3 className="font-medium">{platform.name}</h3>
@@ -257,7 +283,7 @@ export default function Settings() {
 
                 <div className="flex gap-2 mb-4">
                   <a
-                    href={platform.platform === 'dzen' ? 'https://dzen.ru' : '#'}
+                    href={platform.platform === 'dzen' ? 'https://dzen.ru' : platform.platform === 'vk' ? 'https://vk.com' : '#'}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"
@@ -288,7 +314,8 @@ export default function Settings() {
                     Сохранить cookies
                   </button>
 
-                  {/* X-FP-Token section */}
+                  {/* X-FP-Token section (Dzen only) */}
+                  {platform.platform === 'dzen' && (
                   <div className="mt-4 pt-4 border-t border-gray-200">
                     <label className="block text-sm font-medium text-gray-700 mb-1">
                       X-FP-Token (fingerprint)
@@ -316,6 +343,7 @@ export default function Settings() {
                       Сохранить FP-Token
                     </button>
                   </div>
+                  )}
                 </div>
               </div>
             )}

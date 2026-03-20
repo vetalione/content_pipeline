@@ -289,6 +289,90 @@ publishingRouter.post('/auth/dzen/fp-token', async (req, res, next) => {
   }
 });
 
+// ============ VK AUTH ============
+
+// Upload VK session (cookies from Chrome extension)
+publishingRouter.post('/auth/vk/session', async (req, res, next) => {
+  try {
+    const { sessionData } = req.body;
+
+    if (!sessionData) {
+      return res.status(400).json({
+        success: false,
+        error: 'sessionData is required (JSON object with cookies array)'
+      });
+    }
+
+    // Validate and normalize cookie format
+    let processedData = sessionData;
+    if (sessionData.cookies && Array.isArray(sessionData.cookies)) {
+      processedData = {
+        ...sessionData,
+        cookies: sessionData.cookies.map((c: any) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path || '/',
+          expires: c.expires ?? c.expirationDate ?? -1,
+          httpOnly: c.httpOnly || false,
+          secure: c.secure !== false,
+          sameSite: convertSameSite(c.sameSite)
+        }))
+      };
+    }
+
+    const fs = await import('fs');
+    const path = await import('path');
+    const sessionsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+      ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'vk-sessions')
+      : path.resolve(__dirname, '../services/publishers/sessions');
+    const sessionPath = path.join(sessionsDir, 'vk-state.json');
+
+    if (!fs.existsSync(sessionsDir)) {
+      fs.mkdirSync(sessionsDir, { recursive: true });
+    }
+
+    fs.writeFileSync(sessionPath, JSON.stringify(processedData, null, 2));
+
+    const vkCookieCount = (processedData.cookies || []).filter(
+      (c: any) => c.domain && (c.domain.includes('vk.com') || c.domain.includes('.vk.com'))
+    ).length;
+
+    console.log(`✅ VK session saved with ${processedData.cookies?.length || 0} cookies (${vkCookieCount} vk.com)`);
+
+    res.json({
+      success: true,
+      message: 'VK session uploaded successfully',
+      path: sessionPath,
+      cookieCount: processedData.cookies?.length || 0,
+      vkCookieCount,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Check VK auth status
+publishingRouter.get('/auth/vk/status', async (_req, res) => {
+  const fs = await import('fs');
+  const path = await import('path');
+  const sessionsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'vk-sessions')
+    : path.resolve(__dirname, '../services/publishers/sessions');
+  const sessionPath = path.join(sessionsDir, 'vk-state.json');
+
+  const hasSession = fs.existsSync(sessionPath);
+
+  res.json({
+    success: true,
+    data: {
+      platform: 'vk',
+      authenticated: hasSession,
+      sessionPath: hasSession ? sessionPath : null,
+    }
+  });
+});
+
 // ============ DZEN SCREENSHOTS API ============
 
 // Get list of screenshots
