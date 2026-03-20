@@ -47,10 +47,10 @@ publishingRouter.post('/:articleId/publish', async (req, res, next) => {
           let result;
           switch (pub.platform) {
             case Platform.TELEGRAM:
-              result = await publishToTelegram(article);
+              result = await publishToTelegram(article as any);
               break;
             case Platform.VK:
-              result = await publishToVK(article);
+              result = await publishToVK(article as any);
               break;
             case Platform.DZEN: {
               const dzenResult = await publishToDzenApi(article as any);

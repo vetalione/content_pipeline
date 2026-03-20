@@ -17,7 +17,7 @@ import { ArticleContent, CoverImage } from '@content-pipeline/shared';
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
-type ArticleWithCover = {
+export type ArticleWithCover = {
   id: string;
   celebrityName: string;
   content: ArticleContent | any;
@@ -27,7 +27,7 @@ type ArticleWithCover = {
 };
 
 /** Telegraph Node — the content format Telegra.ph API uses */
-interface TelegraphNode {
+export interface TelegraphNode {
   tag?: string;
   attrs?: Record<string, string>;
   children?: (TelegraphNode | string)[];
@@ -57,7 +57,7 @@ const TELEGRAPH_TOKEN_FILE = path.join(
   'telegraph-token.json'
 );
 
-async function getTelegraphToken(): Promise<string> {
+export async function getTelegraphToken(): Promise<string> {
   // 1. Check env var
   if (process.env.TELEGRAPH_TOKEN) {
     return process.env.TELEGRAPH_TOKEN;
@@ -125,7 +125,7 @@ function getPublicImageUrl(localPath: string): string | null {
 }
 
 /** Resolve local path (/images/..., /covers/...) or full filesystem path to absolute path */
-function resolveImagePath(imagePath: string): string {
+export function resolveImagePath(imagePath: string): string {
   const storageBase = process.env.STORAGE_PATH || process.cwd();
   if (imagePath.startsWith('/images/') || imagePath.startsWith('/covers/')) {
     return path.join(storageBase, imagePath);
@@ -140,7 +140,7 @@ function resolveImagePath(imagePath: string): string {
  * Env: IMGBB_API_KEY — get one free at https://api.imgbb.com/
  * Returns the public display URL or null on failure.
  */
-async function uploadToImgbb(imagePath: string): Promise<string | null> {
+export async function uploadToImgbb(imagePath: string): Promise<string | null> {
   const apiKey = process.env.IMGBB_API_KEY;
   if (!apiKey) return null;
 
@@ -208,7 +208,7 @@ async function getImageForTelegraph(imagePath: string): Promise<string | null> {
 // ── Telegraph Content Builder ──────────────────────────────────────────────────
 
 /** Build Telegraph content nodes from ArticleContent */
-async function buildTelegraphContent(
+export async function buildTelegraphContent(
   content: ArticleContent,
   coverImage: CoverImage | undefined
 ): Promise<TelegraphNode[]> {
@@ -296,7 +296,7 @@ async function buildTelegraphContent(
 // ── Telegraph Publishing ───────────────────────────────────────────────────────
 
 /** Create a Telegraph article, returns the URL */
-async function createTelegraphPage(
+export async function createTelegraphPage(
   token: string,
   title: string,
   content: TelegraphNode[],

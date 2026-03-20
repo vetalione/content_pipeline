@@ -15,10 +15,6 @@ const connection = process.env.REDIS_URL
       retryStrategy: (times: number) => Math.min(times * 500, 5000),
     });
 
-// Disable RDB snapshots and AOF — queue data is transient, no need for persistence
-connection.config('SET', 'save', '').catch(() => {});
-connection.config('SET', 'appendonly', 'no').catch(() => {});
-
 // Job cleanup: keep only last 20 completed jobs (1 day) and last 10 failed (7 days)
 // This prevents Redis RAM from growing indefinitely — was the main $15 Redis cost driver
 const defaultJobOptions = {
