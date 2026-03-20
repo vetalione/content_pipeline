@@ -224,6 +224,23 @@ async function fetchEditorHash(cookieHeader: string): Promise<string> {
     }
   }
 
+  // DEBUG: dump all occurrences of "hash" with surrounding context
+  console.log('   ⚠️ DEBUG: Could not find hash. Dumping all "hash" contexts from HTML:');
+  const hashContexts = [...html.matchAll(/(.{0,80}hash.{0,80})/gi)];
+  const seen = new Set<string>();
+  for (const m of hashContexts.slice(0, 30)) {
+    const snippet = m[1].replace(/\s+/g, ' ').trim();
+    if (!seen.has(snippet)) {
+      seen.add(snippet);
+      console.log(`     ... ${snippet} ...`);
+    }
+  }
+
+  // Also check if the page is a login redirect or error
+  if (html.includes('login_page') || html.includes('al_login')) {
+    throw new Error('VK session expired — page redirected to login. Re-upload cookies in Settings.');
+  }
+
   throw new Error(
     'Could not extract VK articles hash from page HTML. Check cookies validity. ' +
       `Page size: ${html.length} chars, URL: ${pageUrl}`
