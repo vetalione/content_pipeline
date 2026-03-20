@@ -180,14 +180,13 @@ function buildStorageState(): { cookies: any[]; origins: any[] } {
   }
 
   const cookies = vkCookies.map((c: any) => {
-    // sameSite: Playwright expects 'Strict', 'Lax', or 'None'
-    // The cookies may already be converted (from Settings upload) or raw from EditThisCookie
-    const rawSS = (c.sameSite || 'Lax').toString();
-    let sameSite: 'Strict' | 'Lax' | 'None';
-    const ssLower = rawSS.toLowerCase();
-    if (ssLower === 'strict') sameSite = 'Strict';
-    else if (ssLower === 'none' || ssLower === 'no_restriction') sameSite = 'None';
-    else sameSite = 'Lax';
+    // IMPORTANT: EditThisCookie exports sameSite as "no_restriction" for cookies
+    // without an explicit SameSite attribute. Chrome treats these as Lax by default.
+    // Our Settings upload route converts "no_restriction" → "None", but that's WRONG
+    // for Playwright — "None" makes cookies cross-site-only and causes redirect loops.
+    // Force everything to "Lax" (the browser default) unless explicitly "Strict".
+    const rawSS = (c.sameSite || '').toString().toLowerCase();
+    const sameSite: 'Strict' | 'Lax' | 'None' = rawSS === 'strict' ? 'Strict' : 'Lax';
 
     return {
       name: c.name,
@@ -196,7 +195,7 @@ function buildStorageState(): { cookies: any[]; origins: any[] } {
       path: c.path || '/',
       expires: c.expires ?? c.expirationDate ?? -1,
       httpOnly: c.httpOnly ?? false,
-      secure: sameSite === 'None' ? true : (c.secure ?? false),
+      secure: c.secure ?? false,
       sameSite,
     };
   });
