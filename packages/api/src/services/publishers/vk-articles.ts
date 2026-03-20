@@ -176,36 +176,55 @@ async function openEditor(cookieHeader: string): Promise<EditorSession> {
 
   console.log(`   📡 POST al_articles.php?act=open_editor`);
 
-  const body = new URLSearchParams({
+  const baseParams: Record<string, string> = {
     act: 'open_editor',
     al: '1',
     article_id: '0',
     article_owner_id: `-${groupId}`,
     from_post_convert: '0',
     post_data_medias: '',
-  });
+  };
 
-  const res = await fetch('https://vk.com/al_articles.php?act=open_editor', {
-    method: 'POST',
-    headers: vkBrowserHeaders(cookieHeader, referer),
-    body,
-  });
+  // First attempt
+  let data = await postOpenEditor(cookieHeader, referer, baseParams);
+  let responseCode = data?.payload?.[0];
 
-  if (!res.ok) {
-    const text = await res.text();
-    throw new Error(`open_editor failed: ${res.status} — ${text.substring(0, 300)}`);
-  }
-
-  const data = (await res.json()) as any;
-
-  const responseCode = data?.payload?.[0];
+  // Handle code-3 access-check gate: VK wants IP confirmation.
+  // Extract ip_h + security_token from payload[1], retry with those added.
   if (responseCode === '3' || responseCode === 3) {
-    const raw = JSON.stringify(data).substring(0, 500);
-    throw new Error(
-      `VK returned access-check gate (code 3) for open_editor. ` +
-      `Session cookies may be expired or IP flagged. Re-upload fresh cookies. ` +
-      `Response: ${raw}`
-    );
+    const gate = data.payload[1];
+    if (!Array.isArray(gate) || gate.length < 3) {
+      throw new Error(
+        `VK code-3 gate but unexpected payload[1] structure: ${JSON.stringify(gate).substring(0, 300)}`
+      );
+    }
+
+    // Values come wrapped in literal quotes: "\"abc\"" → abc
+    const stripQuotes = (s: string) => s.replace(/^"|"$/g, '');
+    const ipH = stripQuotes(gate[0]);
+    const securityToken = stripQuotes(gate[2]);
+
+    console.log(`   🔐 Code-3 access-check gate — retrying with ip_h + _security_token`);
+    console.log(`   📋 ip_h: ${ipH}`);
+
+    // Retry with security params
+    const retryParams = {
+      ...baseParams,
+      ip_h: ipH,
+      _security_token: securityToken,
+    };
+
+    data = await postOpenEditor(cookieHeader, referer, retryParams);
+    responseCode = data?.payload?.[0];
+
+    if (responseCode === '3' || responseCode === 3) {
+      const raw = JSON.stringify(data).substring(0, 500);
+      throw new Error(
+        `VK returned code-3 again after security retry. ` +
+        `Session cookies may be expired. Re-upload fresh cookies. ` +
+        `Response: ${raw}`
+      );
+    }
   }
 
   if (responseCode !== 0) {
@@ -238,6 +257,26 @@ async function openEditor(cookieHeader: string): Promise<EditorSession> {
   console.log(`   📋 photoUploadUrl: ${photoUploadUrl ? 'obtained' : 'N/A'}`);
 
   return { saveDraftHash, uuid, photoUploadUrl, accessHash };
+}
+
+/** Low-level POST to al_articles.php?act=open_editor */
+async function postOpenEditor(
+  cookieHeader: string,
+  referer: string,
+  params: Record<string, string>,
+): Promise<any> {
+  const res = await fetch('https://vk.com/al_articles.php?act=open_editor', {
+    method: 'POST',
+    headers: vkBrowserHeaders(cookieHeader, referer),
+    body: new URLSearchParams(params),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`open_editor failed: ${res.status} — ${text.substring(0, 300)}`);
+  }
+
+  return (await res.json()) as any;
 }
 
 // ── Photo Upload ───────────────────────────────────────────────────────────────
