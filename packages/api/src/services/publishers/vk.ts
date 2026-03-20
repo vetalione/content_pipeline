@@ -1,10 +1,13 @@
 /**
- * VK Publisher — Telegraph article + VK group wall post with cover
+ * VK Publisher — Group wall post with cover photo and article text
  *
  * Flow:
- * 1. Create full article on Telegra.ph (reuses Telegraph from telegram.ts)
- * 2. Upload cover photo to VK via photos API
- * 3. Post to VK group wall: cover photo + teaser + link to Telegraph article
+ * 1. Upload cover photo to VK via photos API
+ * 2. Build formatted wall post text from article content
+ * 3. Post to VK group wall: cover photo + formatted text
+ *
+ * Note: VK Articles (vk.com/@group) will be added later via HTTP API
+ * for full rich-text articles. For now, wall posts support up to ~16K chars.
  *
  * Env vars:
  *   VK_ACCESS_TOKEN  — group or user token with wall.post + photos permissions
@@ -15,9 +18,6 @@ import fs from 'fs';
 import { ArticleContent, CoverImage } from '@content-pipeline/shared';
 import {
   ArticleWithCover,
-  getTelegraphToken,
-  buildTelegraphContent,
-  createTelegraphPage,
   resolveImagePath,
 } from './telegram';
 
@@ -188,13 +188,85 @@ async function createWallPost(
   return url;
 }
 
+// ── Text Builder ───────────────────────────────────────────────────────────────
+
+/** Build a formatted wall post from article content. VK supports ~16K chars. */
+function buildWallText(title: string, content: ArticleContent): string {
+  const parts: string[] = [];
+
+  // Title
+  parts.push(`📰 ${title}`);
+  parts.push('');
+
+  // Teaser
+  if (content.teaser) {
+    parts.push(content.teaser);
+    parts.push('');
+    parts.push('—'.repeat(20));
+    parts.push('');
+  }
+
+  // Sections
+  for (const section of content.sections) {
+    parts.push(`📌 ${section.heading}`);
+    parts.push('');
+    if (section.paragraph1) parts.push(section.paragraph1);
+    if (section.paragraph2) parts.push(section.paragraph2);
+    if (section.blockquote) {
+      parts.push('');
+      parts.push(`💬 «${section.blockquote}»`);
+    }
+    parts.push('');
+  }
+
+  // Conclusion
+  if (content.conclusion) {
+    parts.push('—'.repeat(20));
+    parts.push('');
+    parts.push(`📌 ${content.conclusion.heading}`);
+    parts.push('');
+    parts.push(content.conclusion.text);
+    parts.push('');
+  }
+
+  // Hero quote
+  if (content.heroQuote) {
+    parts.push(`💬 «${content.heroQuote.text}» — ${content.heroQuote.author}`);
+    parts.push('');
+  }
+
+  // Bonus fact
+  if (content.bonusFact) {
+    parts.push('🎁 Бонусный факт:');
+    parts.push(content.bonusFact);
+    parts.push('');
+  }
+
+  // CTA
+  if (content.cta) {
+    parts.push('—'.repeat(20));
+    parts.push(content.cta);
+  }
+
+  // Brand ending
+  if (content.brandEnding) {
+    parts.push(content.brandEnding);
+  }
+
+  // VK wall.post limit is ~16,384 chars
+  const text = parts.join('\n');
+  if (text.length > 16000) {
+    return text.substring(0, 15997) + '...';
+  }
+  return text;
+}
+
 // ── Main Entry Point ───────────────────────────────────────────────────────────
 
 /**
  * Publish article to VK:
- * 1. Creates full article on Telegra.ph
- * 2. Uploads cover photo to VK
- * 3. Posts to group wall: cover + teaser + link to Telegraph
+ * 1. Uploads cover photo to VK
+ * 2. Posts to group wall: cover + full formatted article text
  */
 export async function publishToVK(article: ArticleWithCover): Promise<{ url: string }> {
   const content = article.content as ArticleContent;
@@ -207,20 +279,7 @@ export async function publishToVK(article: ArticleWithCover): Promise<{ url: str
   console.log(`📰 Publishing to VK: "${title}"`);
   console.log('============================================================');
 
-  // 1. Get Telegraph token
-  const telegraphToken = await getTelegraphToken();
-
-  // 2. Build Telegraph content
-  console.log('📝 Building Telegraph article...');
-  const telegraphContent = await buildTelegraphContent(content, coverImage);
-  console.log(`   ✅ Built ${telegraphContent.length} content nodes`);
-
-  // 3. Create Telegraph page
-  console.log('📄 Creating Telegraph page...');
-  const telegraphUrl = await createTelegraphPage(telegraphToken, title, telegraphContent);
-  console.log(`   ✅ Telegraph: ${telegraphUrl}`);
-
-  // 4. Upload cover photo to VK
+  // 1. Upload cover photo to VK
   let photoAttachment: string | null = null;
   if (coverImage) {
     console.log('🖼️  Uploading cover to VK...');
@@ -228,18 +287,11 @@ export async function publishToVK(article: ArticleWithCover): Promise<{ url: str
     photoAttachment = await uploadPhotoToVK(coverSrc);
   }
 
-  // 5. Build wall post message
-  const teaser = content.teaser || '';
-  const truncatedTeaser = teaser.length > 500 ? teaser.substring(0, 497) + '...' : teaser;
-  const message = [
-    `📰 ${title}`,
-    '',
-    truncatedTeaser,
-    '',
-    `👉 Читать полностью: ${telegraphUrl}`,
-  ].join('\n');
+  // 2. Build wall post text
+  const message = buildWallText(title, content);
+  console.log(`   📝 Wall text: ${message.length} chars`);
 
-  // 6. Post to VK wall
+  // 3. Post to VK wall
   console.log('📢 Posting to VK group wall...');
   const postUrl = await createWallPost(message, photoAttachment);
   console.log(`   ✅ VK wall post: ${postUrl}`);

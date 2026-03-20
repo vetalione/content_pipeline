@@ -57,6 +57,26 @@ const TELEGRAPH_TOKEN_FILE = path.join(
   'telegraph-token.json'
 );
 
+/** Cache file mapping articleId → Telegraph URL to avoid duplicates */
+const TELEGRAPH_CACHE_FILE = path.join(
+  process.env.STORAGE_PATH || process.cwd(),
+  'telegraph-cache.json'
+);
+
+function loadTelegraphCache(): Record<string, string> {
+  if (fs.existsSync(TELEGRAPH_CACHE_FILE)) {
+    try { return JSON.parse(fs.readFileSync(TELEGRAPH_CACHE_FILE, 'utf-8')); }
+    catch { /* ignore */ }
+  }
+  return {};
+}
+
+function saveTelegraphCache(cache: Record<string, string>): void {
+  const dir = path.dirname(TELEGRAPH_CACHE_FILE);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
+  fs.writeFileSync(TELEGRAPH_CACHE_FILE, JSON.stringify(cache, null, 2));
+}
+
 export async function getTelegraphToken(): Promise<string> {
   // 1. Check env var
   if (process.env.TELEGRAPH_TOKEN) {
@@ -322,6 +342,42 @@ export async function createTelegraphPage(
   return data.result.url;
 }
 
+// ── Telegraph Page Cache (prevents duplicates) ─────────────────────────────────
+
+/**
+ * Get existing Telegraph page for article or create a new one.
+ * Caches URLs so the same article always links to one Telegraph page.
+ */
+export async function getOrCreateTelegraphPage(
+  articleId: string,
+  title: string,
+  content: ArticleContent,
+  coverImage: CoverImage | undefined
+): Promise<string> {
+  // Check cache first
+  const cache = loadTelegraphCache();
+  if (cache[articleId]) {
+    console.log(`   ♻️  Reusing Telegraph page: ${cache[articleId]}`);
+    return cache[articleId];
+  }
+
+  // Create new page
+  const telegraphToken = await getTelegraphToken();
+  console.log('📝 Building Telegraph article...');
+  const telegraphContent = await buildTelegraphContent(content, coverImage);
+  console.log(`   ✅ Built ${telegraphContent.length} content nodes`);
+
+  console.log('📄 Creating Telegraph page...');
+  const url = await createTelegraphPage(telegraphToken, title, telegraphContent);
+  console.log(`   ✅ Telegraph: ${url}`);
+
+  // Save to cache
+  cache[articleId] = url;
+  saveTelegraphCache(cache);
+
+  return url;
+}
+
 // ── Telegram Bot Posting ───────────────────────────────────────────────────────
 
 /** Send a photo with caption to the Telegram channel */
@@ -541,20 +597,10 @@ export async function publishToTelegram(article: ArticleWithCover): Promise<{ ur
   console.log(`📰 Publishing to Telegram: "${title}"`);
   console.log('============================================================');
 
-  // 1. Get Telegraph token
-  const telegraphToken = await getTelegraphToken();
+  // 1. Get or reuse Telegraph page (avoids duplicates across platforms)
+  const telegraphUrl = await getOrCreateTelegraphPage(article.id, title, content, coverImage);
 
-  // 2. Build Telegraph content
-  console.log('📝 Building Telegraph article...');
-  const telegraphContent = await buildTelegraphContent(content, coverImage);
-  console.log(`   ✅ Built ${telegraphContent.length} content nodes`);
-
-  // 3. Create Telegraph page
-  console.log('📄 Creating Telegraph page...');
-  const telegraphUrl = await createTelegraphPage(telegraphToken, title, telegraphContent);
-  console.log(`   ✅ Telegraph: ${telegraphUrl}`);
-
-  // 4. Post to channel
+  // 2. Post to channel
   console.log('📢 Posting to Telegram channel...');
   const teaser = content.teaser || '';
   const messageUrl = await sendChannelPost(title, teaser, telegraphUrl, coverImage);
