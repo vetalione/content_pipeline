@@ -170,72 +170,117 @@ async function fetchEditorHash(cookieHeader: string): Promise<string> {
 
   console.log(`   🔑 Fetching article editor hash for /${screenName}...`);
 
-  // ── Approach 1: AJAX call to al_articles.php like VK's SPA does
-  const ajaxEndpoints = [
-    { act: 'edit', desc: 'edit' },
-    { act: 'stats_vars', desc: 'stats_vars' },
-    { act: 'get_editor', desc: 'get_editor' },
-  ];
+  // ── Approach 1: AJAX call to al_articles.php
+  // VK returns: {"payload":["CODE",["\\"HASH\\"",...]]}
+  // payload[0] code "3" = access-check gate, payload[1][0] = session hash (hex, 18 chars)
+  // We first try to pass the access check, then re-request editor data.
+  const referer = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
 
-  for (const ep of ajaxEndpoints) {
-    try {
-      console.log(`   📡 Trying al_articles.php?act=${ep.act}...`);
-      const referer = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
-      const body = new URLSearchParams({
-        act: ep.act,
-        al: '1',
-        article_id: '0',
-        article_owner_id: `-${groupId}`,
-      });
+  // Step 1: Make initial request — VK will likely return code "3" (access check)
+  console.log(`   📡 POST al_articles.php?act=edit...`);
+  const editBody = new URLSearchParams({
+    act: 'edit',
+    al: '1',
+    article_id: '0',
+    article_owner_id: `-${groupId}`,
+  });
 
-      const res = await fetch('https://vk.com/al_articles.php', {
+  const editRes = await fetch('https://vk.com/al_articles.php', {
+    method: 'POST',
+    headers: vkBrowserHeaders(cookieHeader, referer),
+    body: editBody,
+  });
+
+  if (!editRes.ok) {
+    throw new Error(`al_articles.php returned HTTP ${editRes.status}`);
+  }
+
+  const editText = await editRes.text();
+  console.log(`   📄 Response: ${editText.length} chars`);
+
+  let editJson: any;
+  try {
+    editJson = JSON.parse(editText);
+  } catch {
+    console.log(`   ⚠️ Non-JSON response: ${editText.substring(0, 300)}`);
+    throw new Error('al_articles.php returned non-JSON response');
+  }
+
+  const payloadCode = editJson?.payload?.[0];
+  const payloadData = editJson?.payload?.[1];
+  console.log(`   📋 Payload code: ${payloadCode}`);
+
+  // If code "3": VK's access-check gate — payload[1] = [hash, redirect_url, token]
+  if (payloadCode === '3' && Array.isArray(payloadData) && payloadData.length >= 3) {
+    // Values are JSON-escaped strings like "\"abc123\""
+    const stripQuotes = (s: string) => s.replace(/^"|"$/g, '');
+    const acHash = stripQuotes(payloadData[0]);
+    const acUrl = stripQuotes(payloadData[1]);
+    const acToken = stripQuotes(payloadData[2]);
+
+    console.log(`   🔐 Access check: hash=${acHash}, url_len=${acUrl.length}`);
+
+    // Step 2: Complete the access check via al_ac.php
+    console.log(`   📡 POST al_ac.php (access check)...`);
+    const acBody = new URLSearchParams({
+      act: 'a_check',
+      al: '1',
+      hash: acHash,
+      to: acUrl,
+      token: acToken,
+    });
+
+    const acRes = await fetch('https://vk.com/al_ac.php', {
+      method: 'POST',
+      headers: vkBrowserHeaders(cookieHeader, referer),
+      body: acBody,
+    });
+
+    if (acRes.ok) {
+      const acText = await acRes.text();
+      console.log(`   📄 Access check response: ${acText.length} chars`);
+      console.log(`   📋 AC body: ${acText.substring(0, 500)}`);
+
+      // Step 3: Re-request the editor now that access check is complete
+      console.log(`   📡 Re-requesting al_articles.php?act=edit...`);
+      const retryRes = await fetch('https://vk.com/al_articles.php', {
         method: 'POST',
         headers: vkBrowserHeaders(cookieHeader, referer),
-        body,
+        body: new URLSearchParams({
+          act: 'edit',
+          al: '1',
+          article_id: '0',
+          article_owner_id: `-${groupId}`,
+        }),
       });
 
-      if (!res.ok) {
-        console.log(`   ⚠️ ${ep.desc}: HTTP ${res.status}`);
-        continue;
-      }
+      if (retryRes.ok) {
+        const retryText = await retryRes.text();
+        console.log(`   📄 Retry response: ${retryText.length} chars`);
+        console.log(`   📋 Retry body start: ${retryText.substring(0, 500)}`);
 
-      const text = await res.text();
-      console.log(`   📄 ${ep.desc} response: ${text.length} chars`);
-
-      // Look for hex hash in the response (16-20 char hex strings)
-      // VK article hashes are typically 18-20 hex chars
-      const hashPatterns = [
-        /"hash"\s*:\s*"([a-f0-9]{16,22})"/gi,
-        /["']hash["']\s*:\s*["']([a-f0-9]{16,22})["']/gi,
-        /hash=([a-f0-9]{16,22})/gi,
-      ];
-
-      for (const pattern of hashPatterns) {
-        const matches = [...text.matchAll(pattern)];
-        for (const m of matches) {
-          // Skip known non-article hashes
-          const hash = m[1];
-          if (hash.length >= 16 && hash.length <= 22) {
-            console.log(`   🔑 Found hash via ${ep.desc}: ${hash}`);
-            return hash;
-          }
+        // Try to extract hash from the retry response
+        const retryHash = extractHashFromResponse(retryText);
+        if (retryHash) {
+          console.log(`   🔑 Found hash after access check: ${retryHash}`);
+          return retryHash;
         }
       }
-
-      // Log a snippet for debugging
-      if (text.length > 0 && text.length < 2000) {
-        console.log(`   📋 Full response: ${text.substring(0, 500)}`);
-      } else if (text.length >= 2000) {
-        console.log(`   📋 Response start: ${text.substring(0, 300)}`);
-        // Search for "hash" context
-        const hashIdx = text.indexOf('hash');
-        if (hashIdx >= 0) {
-          console.log(`   📋 Hash context: ...${text.substring(Math.max(0, hashIdx - 50), hashIdx + 100)}...`);
-        }
-      }
-    } catch (err: any) {
-      console.log(`   ⚠️ ${ep.desc} failed: ${err.message}`);
     }
+
+    // If access check didn't yield a different response, try using the session hash directly
+    // The acHash (from payload[1][0]) is a session-level hex hash that may work for articles
+    if (/^[a-f0-9]{14,22}$/.test(acHash)) {
+      console.log(`   🔑 Using session hash from access-check: ${acHash}`);
+      return acHash;
+    }
+  }
+
+  // If payload code is not "3", try to extract hash directly from the response
+  const directHash = extractHashFromResponse(editText);
+  if (directHash) {
+    console.log(`   🔑 Found hash directly: ${directHash}`);
+    return directHash;
   }
 
   // ── Approach 2: Fetch the full group page and look for the hash in embedded data
@@ -262,32 +307,70 @@ async function fetchEditorHash(cookieHeader: string): Promise<string> {
   const html = await res.text();
   console.log(`   📄 Got page HTML: ${html.length} chars`);
 
-  // Try to find hash in HTML (may be in inline scripts or data attributes)
-  const htmlHashPatterns = [
-    /articles_hash["']\s*:\s*["']([a-f0-9]{16,22})["']/i,
-    /articleHash["':\s]+["']([a-f0-9]{16,22})["']/i,
-    /"hash"\s*:\s*"([a-f0-9]{16,22})"\s*,\s*"?article/i,
-    /Articles[^{]*\{[^}]*?hash["':\s]+["']([a-f0-9]{16,22})["']/i,
-    /extend\(cur\s*,\s*\{[^}]*?hash["':\s]+["']([a-f0-9]{16,22})["']/i,
-  ];
-
-  for (const pattern of htmlHashPatterns) {
-    const match = html.match(pattern);
-    if (match) {
-      console.log(`   🔑 Found hash in HTML: ${match[1]}`);
-      return match[1];
-    }
-  }
-
   // Check if page is a login redirect
   if (html.includes('login_page') || html.includes('al_login')) {
     throw new Error('VK session expired — page redirected to login. Re-upload cookies in Settings.');
   }
 
+  // Try to find hash in HTML
+  const htmlHash = extractHashFromResponse(html);
+  if (htmlHash) {
+    console.log(`   🔑 Found hash in HTML: ${htmlHash}`);
+    return htmlHash;
+  }
+
   throw new Error(
-    'Could not extract VK articles hash. The editor data is loaded dynamically via AJAX. ' +
+    'Could not extract VK articles hash from any endpoint. ' +
       `Page size: ${html.length} chars`
   );
+}
+
+/** Extract a hex hash from VK's response text (JSON or HTML) */
+function extractHashFromResponse(text: string): string | null {
+  // Try parsing as JSON first — look in payload structure
+  try {
+    const json = JSON.parse(text);
+    const payload = json?.payload;
+    if (Array.isArray(payload) && payload.length >= 2) {
+      // VK editor response may have hash in various positions
+      const data = payload[1];
+      if (typeof data === 'object' && data !== null) {
+        // Could be {hash: "..."} or array with hash values
+        if (data.hash && /^[a-f0-9]{14,22}$/.test(data.hash)) {
+          return data.hash;
+        }
+        // Check nested objects
+        for (const key of Object.keys(data)) {
+          const val = data[key];
+          if (typeof val === 'string' && /^[a-f0-9]{14,22}$/.test(val)) {
+            return val;
+          }
+          if (typeof val === 'object' && val?.hash && /^[a-f0-9]{14,22}$/.test(val.hash)) {
+            return val.hash;
+          }
+        }
+      }
+    }
+  } catch {
+    // Not JSON, continue with regex
+  }
+
+  // Regex patterns for hash extraction
+  const patterns = [
+    /articles_hash["']\s*:\s*["']([a-f0-9]{16,22})["']/i,
+    /articleHash["':\s]+["']([a-f0-9]{16,22})["']/i,
+    /"hash"\s*:\s*"([a-f0-9]{16,22})"\s*,\s*"?article/i,
+    /Articles[^{]*\{[^}]*?hash["':\s]+["']([a-f0-9]{16,22})["']/i,
+    /extend\(cur\s*,\s*\{[^}]*?hash["':\s]+["']([a-f0-9]{16,22})["']/i,
+    /\\?"hash\\?"\s*:\s*\\?"([a-f0-9]{16,22})\\?"/i,
+  ];
+
+  for (const pattern of patterns) {
+    const match = text.match(pattern);
+    if (match) return match[1];
+  }
+
+  return null;
 }
 
 // ── Photo Upload ───────────────────────────────────────────────────────────────
