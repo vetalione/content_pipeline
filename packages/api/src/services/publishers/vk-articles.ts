@@ -27,6 +27,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { chromium } from 'playwright';
 import { ArticleContent, CoverImage } from '@content-pipeline/shared';
 import { ArticleWithCover, resolveImagePath } from './telegram';
 
@@ -152,251 +153,246 @@ async function getGroupScreenName(): Promise<string> {
   return name;
 }
 
-// ── CSRF Hash ──────────────────────────────────────────────────────────────────
+// ── CSRF Hash via Playwright ───────────────────────────────────────────────────
 
 /**
- * Fetch the VK articles editor hash needed for al_articles.php?act=save.
- *
- * VK loads the article editor as an AJAX overlay (z-layer).
- * The hash is NOT in the initial page HTML — it's returned via an internal
- * AJAX endpoint. We try multiple approaches:
- * 1. POST al_articles.php?act=edit (AJAX-style) — returns editor config with hash
- * 2. POST al_articles.php?act=stats_vars — lighter endpoint that may return hash
- * 3. Fetch full page HTML and parse (fallback)
+ * Load VK cookies from vk-state.json and convert to Playwright format.
+ * EditThisCookie exports: { name, value, domain, path, expires/expirationDate, ... }
+ * Playwright expects:     { name, value, domain, path, expires, httpOnly, secure, sameSite }
+ */
+function loadVkCookiesForPlaywright(): Array<{
+  name: string;
+  value: string;
+  domain: string;
+  path: string;
+  expires: number;
+  httpOnly: boolean;
+  secure: boolean;
+  sameSite: 'Strict' | 'Lax' | 'None';
+}> {
+  if (!fs.existsSync(VK_STATE_FILE)) {
+    throw new Error('No VK session found. Upload cookies via Settings page first.');
+  }
+  const session = JSON.parse(fs.readFileSync(VK_STATE_FILE, 'utf-8'));
+  const rawCookies: any[] = session.cookies || [];
+
+  return rawCookies
+    .filter((c: any) => c.domain && (c.domain.includes('vk.com') || c.domain.includes('.vk.com')))
+    .map((c: any) => ({
+      name: c.name,
+      value: c.value,
+      domain: c.domain.startsWith('.') ? c.domain : `.${c.domain}`,
+      path: c.path || '/',
+      expires: c.expires ?? c.expirationDate ?? -1,
+      httpOnly: c.httpOnly ?? false,
+      secure: c.secure !== false,
+      sameSite: (c.sameSite === 'strict' ? 'Strict' : c.sameSite === 'lax' ? 'Lax' : 'None') as 'Strict' | 'Lax' | 'None',
+    }));
+}
+
+/**
+ * Use Playwright to open VK's article editor, pass access-check via JS,
+ * intercept the al_articles.php response to extract the editor hash,
+ * and capture all cookies for subsequent HTTP requests.
  */
 async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; cookies: string }> {
   const groupId = getGroupId();
   const screenName = await getGroupScreenName();
 
-  console.log(`   🔑 Fetching article editor hash for /${screenName}...`);
+  console.log(`   🎭 Launching Playwright to get VK editor hash...`);
 
-  // Track cookies — we merge Set-Cookie from responses to build an active session
-  let activeCookies = cookieHeader;
-
-  const referer = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
-
-  // Step 1: Make initial request to al_articles.php
-  console.log(`   📡 POST al_articles.php?act=edit...`);
-  const editRes = await fetch('https://vk.com/al_articles.php', {
-    method: 'POST',
-    headers: vkBrowserHeaders(activeCookies, referer),
-    body: new URLSearchParams({
-      act: 'edit',
-      al: '1',
-      article_id: '0',
-      article_owner_id: `-${groupId}`,
-    }),
-    redirect: 'manual',
+  const browser = await chromium.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
   });
 
-  activeCookies = mergeCookies(activeCookies, editRes.headers);
-  const editText = await editRes.text();
-  console.log(`   📄 Response: HTTP ${editRes.status}, ${editText.length} chars`);
-
-  let editJson: any;
   try {
-    editJson = JSON.parse(editText);
-  } catch {
-    console.log(`   ⚠️ Non-JSON response: ${editText.substring(0, 300)}`);
-    throw new Error('al_articles.php returned non-JSON response');
-  }
-
-  const payloadCode = editJson?.payload?.[0];
-  const payloadData = editJson?.payload?.[1];
-  console.log(`   📋 Payload code: ${payloadCode}, type: ${typeof payloadCode}`);
-
-  // If code "3": VK's access-check gate — payload[1] = [hash, redirect_url, token]
-  if ((payloadCode === '3' || payloadCode === 3) && Array.isArray(payloadData) && payloadData.length >= 2) {
-    const stripQuotes = (s: string) => s.replace(/^"|"$/g, '');
-    const acHash = stripQuotes(payloadData[0]);
-    const acUrl = stripQuotes(payloadData[1]);
-    const acToken = payloadData[2] ? stripQuotes(payloadData[2]) : undefined;
-
-    console.log(`   🔐 Access check gate detected`);
-    console.log(`   🔐 hash=${acHash}`);
-    console.log(`   🔐 to=${acUrl}`);
-    console.log(`   🔐 token=${acToken ? acToken.substring(0, 20) + '...' : 'none'}`);
-
-    // Step 2: Complete the access check via al_ac.php
-    // VK's JS sends: act=a_check, hash=<hash>, to=<to>, al=1 (NO token param)
-    console.log(`   📡 POST al_ac.php (access check)...`);
-    const acBody = new URLSearchParams({
-      act: 'a_check',
-      al: '1',
-      hash: acHash,
-      to: acUrl,
+    const context = await browser.newContext({
+      viewport: { width: 1280, height: 900 },
+      userAgent: USER_AGENT,
     });
 
-    const acRes = await fetch('https://vk.com/al_ac.php', {
-      method: 'POST',
-      headers: vkBrowserHeaders(activeCookies, referer),
-      body: acBody,
-      redirect: 'manual',
-    });
+    // Load cookies into browser context
+    const playwrightCookies = loadVkCookiesForPlaywright();
+    console.log(`   🍪 Loading ${playwrightCookies.length} VK cookies into browser`);
+    await context.addCookies(playwrightCookies);
 
-    const acText = await acRes.text();
-    console.log(`   📄 AC response: HTTP ${acRes.status}, ${acText.length} chars`);
-    console.log(`   📋 AC body: ${acText.substring(0, 500)}`);
+    const page = await context.newPage();
 
-    // Capture cookies from al_ac.php response (critical — these enable further access)
-    activeCookies = mergeCookies(activeCookies, acRes.headers);
-    const newCookieCount = acRes.headers.getSetCookie?.()?.length || 0;
-    console.log(`   🍪 AC Set-Cookie count: ${newCookieCount}`);
+    // Set up network interception to capture the editor hash
+    let capturedHash: string | null = null;
 
-    // Step 3: Re-request the editor with updated cookies
-    console.log(`   📡 Re-requesting al_articles.php?act=edit...`);
-    const retryRes = await fetch('https://vk.com/al_articles.php', {
-      method: 'POST',
-      headers: vkBrowserHeaders(activeCookies, referer),
-      body: new URLSearchParams({
-        act: 'edit',
-        al: '1',
-        article_id: '0',
-        article_owner_id: `-${groupId}`,
-      }),
-      redirect: 'manual',
-    });
+    page.on('response', async (response) => {
+      const url = response.url();
+      if (!url.includes('al_articles.php')) return;
 
-    activeCookies = mergeCookies(activeCookies, retryRes.headers);
-    const retryText = await retryRes.text();
-    console.log(`   📄 Retry: HTTP ${retryRes.status}, ${retryText.length} chars`);
-    console.log(`   📋 Retry body: ${retryText.substring(0, 500)}`);
+      try {
+        const text = await response.text();
+        const json = JSON.parse(text);
+        const payload = json?.payload;
 
-    // Try to extract hash from the retry response
-    const retryHash = extractEditorHashFromJson(retryText);
-    if (retryHash) {
-      console.log(`   🔑 Found hash after access check: ${retryHash}`);
-      return { hash: retryHash, cookies: activeCookies };
-    }
-
-    // If retry still returns code "3", the access check might need browser
-    try {
-      const retryJson = JSON.parse(retryText);
-      if (retryJson?.payload?.[0] === '3' || retryJson?.payload?.[0] === 3) {
-        console.log(`   ⚠️ Retry still returns code 3 — access check not cleared`);
-        console.log(`   ⚠️ VK may require browser-side JavaScript to pass access check`);
-      }
-    } catch {}
-  }
-
-  // If we got past access check or there was no code "3", try to extract hash
-  const directHash = extractEditorHashFromJson(editText);
-  if (directHash) {
-    console.log(`   🔑 Found hash: ${directHash}`);
-    return { hash: directHash, cookies: activeCookies };
-  }
-
-  // ── Approach 2: Fetch page HTML and look in embedded scripts
-  console.log('   📄 Fallback: fetching full page HTML...');
-  const pageUrl = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
-  const res = await fetch(pageUrl, {
-    headers: {
-      'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      'Accept-Language': 'ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7',
-      'Cookie': activeCookies,
-      'Sec-Fetch-Dest': 'document',
-      'Sec-Fetch-Mode': 'navigate',
-      'Sec-Fetch-Site': 'none',
-      'Upgrade-Insecure-Requests': '1',
-      'User-Agent': USER_AGENT,
-    },
-    redirect: 'follow',
-  });
-
-  if (!res.ok) {
-    throw new Error(`Failed to fetch VK editor page: ${res.status} ${res.statusText}`);
-  }
-
-  activeCookies = mergeCookies(activeCookies, res.headers);
-  const html = await res.text();
-  console.log(`   📄 Got page HTML: ${html.length} chars`);
-
-  if (html.includes('login_page') || html.includes('al_login')) {
-    throw new Error('VK session expired — page redirected to login. Re-upload cookies in Settings.');
-  }
-
-  // Look for hash in HTML inline scripts
-  const htmlPatterns = [
-    /articles_hash["']\s*:\s*["']([a-f0-9]{16,22})["']/i,
-    /articleHash["':\s]+["']([a-f0-9]{16,22})["']/i,
-    /extend\(cur\s*,\s*\{[^}]*?["']?hash["']?\s*:\s*["']([a-f0-9]{16,22})["']/i,
-  ];
-
-  for (const pattern of htmlPatterns) {
-    const match = html.match(pattern);
-    if (match) {
-      console.log(`   🔑 Found hash in HTML: ${match[1]}`);
-      return { hash: match[1], cookies: activeCookies };
-    }
-  }
-
-  throw new Error(
-    'Could not extract VK articles hash. VK access-check gate could not be passed via HTTP. ' +
-      'This may require Playwright browser automation.'
-  );
-}
-
-/** Merge Set-Cookie headers from a response into existing cookie string */
-function mergeCookies(existing: string, headers: Headers): string {
-  const setCookies = headers.getSetCookie?.() || [];
-  if (setCookies.length === 0) return existing;
-
-  // Parse existing cookies into a map
-  const cookieMap = new Map<string, string>();
-  for (const pair of existing.split('; ')) {
-    const idx = pair.indexOf('=');
-    if (idx > 0) {
-      cookieMap.set(pair.substring(0, idx), pair.substring(idx + 1));
-    }
-  }
-
-  // Add new cookies from Set-Cookie headers
-  for (const setCookie of setCookies) {
-    const nameValue = setCookie.split(';')[0];
-    const idx = nameValue.indexOf('=');
-    if (idx > 0) {
-      cookieMap.set(nameValue.substring(0, idx).trim(), nameValue.substring(idx + 1));
-    }
-  }
-
-  return [...cookieMap.entries()].map(([k, v]) => `${k}=${v}`).join('; ');
-}
-
-/**
- * Extract the editor hash from a VK JSON response.
- * The hash is in payload[1] as an object with a "hash" field,
- * or nested inside the editor config data.
- * Skips code "3" responses (access-check gate).
- */
-function extractEditorHashFromJson(text: string): string | null {
-  try {
-    const json = JSON.parse(text);
-    const payload = json?.payload;
-    if (!Array.isArray(payload) || payload.length < 2) return null;
-
-    // Skip access-check responses (code 3)
-    if (payload[0] === '3' || payload[0] === 3) return null;
-
-    const data = payload[1];
-    if (typeof data === 'object' && data !== null) {
-      // Look for hash field
-      if (data.hash && /^[a-f0-9]{14,22}$/.test(data.hash)) {
-        return data.hash;
-      }
-      // Check nested objects/arrays
-      const candidates: string[] = [];
-      JSON.stringify(data, (key, value) => {
-        if (key === 'hash' && typeof value === 'string' && /^[a-f0-9]{14,22}$/.test(value)) {
-          candidates.push(value);
+        // We want a NON-code-3 response (code 0 = success)
+        if (Array.isArray(payload) && payload.length >= 2) {
+          const code = payload[0];
+          if (code !== '3' && code !== 3) {
+            // Look for hash in the payload
+            const data = payload[1];
+            if (typeof data === 'object' && data !== null) {
+              // Recursively find hex hashes
+              const text = JSON.stringify(data);
+              const hashMatch = text.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"/);
+              if (hashMatch) {
+                capturedHash = hashMatch[1];
+                console.log(`   🔑 Captured hash from network: ${capturedHash}`);
+              }
+            }
+          }
         }
-        return value;
+      } catch {
+        // Non-JSON response, ignore
+      }
+    });
+
+    // Navigate to the group page with article editor overlay
+    const editorUrl = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
+    console.log(`   📄 Navigating to: ${editorUrl}`);
+
+    await page.goto(editorUrl, {
+      waitUntil: 'domcontentloaded',
+      timeout: 30_000,
+    });
+
+    // Wait for the editor to load (VK's JS passes access check automatically)
+    // The editor is loaded as a z-layer overlay
+    console.log(`   ⏳ Waiting for article editor to load...`);
+
+    // Wait for any of these signals that the editor is ready:
+    // 1. The editor container appears in the DOM
+    // 2. A non-code-3 response from al_articles.php is captured
+    // 3. Timeout after 20 seconds
+    const editorReady = await Promise.race([
+      page.waitForSelector('[data-article-editor], .article_edit_wrap, .articles_editor, .article-editor', {
+        timeout: 20_000,
+      }).then(() => 'selector'),
+      new Promise<string>(resolve => {
+        const interval = setInterval(() => {
+          if (capturedHash) {
+            clearInterval(interval);
+            resolve('hash');
+          }
+        }, 300);
+        setTimeout(() => {
+          clearInterval(interval);
+          resolve('timeout');
+        }, 20_000);
+      }),
+    ]).catch(() => 'timeout');
+
+    console.log(`   📋 Editor detection: ${editorReady}, hash captured: ${capturedHash ? 'yes' : 'no'}`);
+
+    // If hash wasn't captured from network, try to extract from page
+    if (!capturedHash) {
+      // Give VK a bit more time to make AJAX calls
+      await sleep(3000);
+
+      // Try to find hash in page's JavaScript variables
+      capturedHash = await page.evaluate(() => {
+        // VK stores editor config in window.cur or global vars
+        const cur = (window as any).cur;
+        if (cur?.options?.hash) return cur.options.hash as string;
+        if (cur?.hash) return cur.hash as string;
+        if (cur?.editorHash) return cur.editorHash as string;
+
+        // Check for hash in VK's article module
+        const articles = (window as any).Articles;
+        if (articles?.options?.hash) return articles.options.hash as string;
+
+        // Search through all script content for hash patterns
+        const scripts = Array.from(document.querySelectorAll('script:not([src])'));
+        for (const script of scripts) {
+          const text = script.textContent || '';
+          const match = text.match(/articles_hash["']\s*:\s*["']([a-f0-9]{14,22})["']/);
+          if (match) return match[1];
+          const match2 = text.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"[^}]*article/);
+          if (match2) return match2[1];
+        }
+
+        return null;
       });
-      if (candidates.length > 0) return candidates[0];
+
+      if (capturedHash) {
+        console.log(`   🔑 Found hash in page JS: ${capturedHash}`);
+      }
     }
-  } catch {
-    // Not valid JSON
+
+    // If still no hash, try making the AJAX call from within the browser
+    if (!capturedHash) {
+      console.log(`   📡 Trying AJAX call from within browser...`);
+      capturedHash = await page.evaluate(async (params) => {
+        const body = new URLSearchParams({
+          act: 'edit',
+          al: '1',
+          article_id: '0',
+          article_owner_id: `-${params.groupId}`,
+        });
+
+        const res = await fetch('/al_articles.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          body,
+        });
+
+        const text = await res.text();
+        const json = JSON.parse(text);
+        const payload = json?.payload;
+
+        if (Array.isArray(payload) && payload.length >= 2 && payload[0] !== '3' && payload[0] !== 3) {
+          const data = payload[1];
+          const str = JSON.stringify(data);
+          const match = str.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"/);
+          if (match) return match[1];
+        }
+
+        return null;
+      }, { groupId });
+
+      if (capturedHash) {
+        console.log(`   🔑 Found hash via in-browser AJAX: ${capturedHash}`);
+      }
+    }
+
+    // Extract all cookies from browser context
+    const browserCookies = await context.cookies('https://vk.com');
+    const cookieString = browserCookies
+      .map(c => `${c.name}=${c.value}`)
+      .join('; ');
+
+    console.log(`   🍪 Captured ${browserCookies.length} cookies from browser`);
+
+    if (!capturedHash) {
+      // Last resort: take a screenshot for debugging
+      const screenshotPath = '/tmp/vk-editor-debug.png';
+      await page.screenshot({ path: screenshotPath, fullPage: true });
+      console.log(`   📸 Debug screenshot saved: ${screenshotPath}`);
+
+      // Log page URL and title
+      console.log(`   📄 Page URL: ${page.url()}`);
+      console.log(`   📄 Page title: ${await page.title()}`);
+
+      throw new Error(
+        'Could not extract VK editor hash via Playwright. ' +
+          'The editor may not have loaded. Check debug screenshot.'
+      );
+    }
+
+    return { hash: capturedHash, cookies: cookieString };
+  } finally {
+    await browser.close();
+    console.log(`   🎭 Browser closed`);
   }
-  return null;
 }
 
 // ── Photo Upload ───────────────────────────────────────────────────────────────
