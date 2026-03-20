@@ -165,8 +165,10 @@ function convertSameSite(sameSite: string | undefined): 'Strict' | 'Lax' | 'None
   if (!sameSite) return 'Lax';
   const lower = sameSite.toLowerCase();
   if (lower === 'strict') return 'Strict';
-  if (lower === 'none' || lower === 'no_restriction') return 'None';
-  // 'lax', 'unspecified', or anything else -> Lax
+  if (lower === 'none') return 'None';
+  // 'no_restriction' means "unspecified" in EditThisCookie — browser default is Lax.
+  // Mapping to "None" caused redirect loops in Playwright (cross-site-only semantics).
+  // 'lax', 'no_restriction', 'unspecified', or anything else -> Lax
   return 'Lax';
 }
 

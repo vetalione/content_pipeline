@@ -156,11 +156,10 @@ async function getGroupScreenName(): Promise<string> {
 // ── CSRF Hash via Playwright ───────────────────────────────────────────────────
 
 /**
- * Build Playwright storageState from vk-state.json cookies.
- * This is the same format Playwright uses for context({ storageState }) —
- * proven to work with Dzen publisher.
+ * Build Playwright cookie list from vk-state.json.
+ * Also checks for expired cookies and warns.
  */
-function buildStorageState(): { cookies: any[]; origins: any[] } {
+function buildPlaywrightCookies(): any[] {
   if (!fs.existsSync(VK_STATE_FILE)) {
     throw new Error('No VK session found. Upload cookies via Settings page first.');
   }
@@ -170,43 +169,83 @@ function buildStorageState(): { cookies: any[]; origins: any[] } {
   const vkCookies = rawCookies
     .filter((c: any) => c.domain && (c.domain.includes('vk.com') || c.domain.includes('.vk.com')));
 
-  console.log(`   🍪 Raw VK cookies: ${vkCookies.length} (total in file: ${rawCookies.length})`);
+  console.log(`   🍪 VK cookies in file: ${vkCookies.length} (total: ${rawCookies.length})`);
 
-  // Log a few key cookies for debugging
-  const keyNames = ['remixsid', 'remixnsid', 'remixlang', 'remixdt', 'remixua'];
-  for (const name of keyNames) {
-    const c = vkCookies.find((ck: any) => ck.name === name);
-    if (c) console.log(`   🍪 ${c.name}: domain=${c.domain}, sameSite=${c.sameSite}, secure=${c.secure}`);
-  }
+  const now = Math.floor(Date.now() / 1000);
+  const keyNames = ['remixsid', 'remixnsid', 'remixlhk', 'remixlang', 'remixdt', 'remixua'];
 
   const cookies = vkCookies.map((c: any) => {
-    // IMPORTANT: EditThisCookie exports sameSite as "no_restriction" for cookies
-    // without an explicit SameSite attribute. Chrome treats these as Lax by default.
-    // Our Settings upload route converts "no_restriction" → "None", but that's WRONG
-    // for Playwright — "None" makes cookies cross-site-only and causes redirect loops.
-    // Force everything to "Lax" (the browser default) unless explicitly "Strict".
     const rawSS = (c.sameSite || '').toString().toLowerCase();
+    // "no_restriction" in EditThisCookie = browser default = Lax.
+    // "None" in stored file (from our broken conversion) = also force to Lax.
     const sameSite: 'Strict' | 'Lax' | 'None' = rawSS === 'strict' ? 'Strict' : 'Lax';
+
+    const expires = c.expires ?? c.expirationDate ?? -1;
+
+    // Check for expired cookies
+    if (expires > 0 && expires < now && keyNames.includes(c.name)) {
+      console.log(`   ⚠️ EXPIRED cookie: ${c.name} (expired ${new Date(expires * 1000).toISOString()})`);
+    }
 
     return {
       name: c.name,
       value: c.value,
       domain: c.domain || '.vk.com',
       path: c.path || '/',
-      expires: c.expires ?? c.expirationDate ?? -1,
+      expires,
       httpOnly: c.httpOnly ?? false,
       secure: c.secure ?? false,
       sameSite,
     };
   });
 
-  return { cookies, origins: [] };
+  // Log key cookies for debugging
+  for (const name of keyNames) {
+    const c = cookies.find((ck: any) => ck.name === name);
+    if (c) {
+      const expStr = c.expires > 0
+        ? (c.expires < now ? `EXPIRED ${new Date(c.expires * 1000).toISOString()}` : `valid until ${new Date(c.expires * 1000).toISOString()}`)
+        : 'session';
+      console.log(`   🍪 ${c.name}: domain=${c.domain} secure=${c.secure} ss=${c.sameSite} exp=${expStr}`);
+    }
+  }
+
+  const expired = cookies.filter((c: any) => c.expires > 0 && c.expires < now);
+  if (expired.length > 0) {
+    console.log(`   ⚠️ ${expired.length}/${cookies.length} cookies are expired! Re-upload fresh cookies.`);
+  }
+
+  return cookies;
+}
+
+/** Try to extract editor hash from VK's al_articles.php response payload */
+function extractHashFromPayload(body: string): { hash: string | null; code: string | number | null; rawPayload: string } {
+  try {
+    const json = JSON.parse(body);
+    const payload = json?.payload;
+    if (!Array.isArray(payload) || payload.length < 2) {
+      return { hash: null, code: null, rawPayload: body.substring(0, 300) };
+    }
+    const code = payload[0];
+    if (code === '3' || code === 3) {
+      // Access-check gate — payload[1] has [hash, redirect_url, token]
+      return { hash: null, code, rawPayload: JSON.stringify(payload[1]).substring(0, 300) };
+    }
+    const str = JSON.stringify(payload[1]);
+    const hashMatch = str.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"/);
+    return { hash: hashMatch?.[1] || null, code, rawPayload: str.substring(0, 300) };
+  } catch {
+    return { hash: null, code: null, rawPayload: body.substring(0, 300) };
+  }
 }
 
 /**
- * Use Playwright to open VK's article editor, pass access-check via JS,
- * intercept the al_articles.php response to extract the editor hash,
- * and capture all cookies for subsequent HTTP requests.
+ * Extract the VK articles editor CSRF hash using Playwright.
+ *
+ * Three strategies (tried in order):
+ * 1. context.request API — Playwright's HTTP client with cookie jar, NO page navigation
+ * 2. CDP cookie injection + page navigation — most reliable browser cookie layer
+ * 3. In-page AJAX — if we land on vk.com, use fetch() inside the page context
  */
 async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; cookies: string }> {
   const groupId = getGroupId();
@@ -214,9 +253,8 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
 
   console.log(`   🎭 Launching Playwright to get VK editor hash...`);
 
-  // Convert cookies to Playwright storageState format (same approach as Dzen)
-  const storageState = buildStorageState();
-  console.log(`   🍪 Prepared storageState with ${storageState.cookies.length} cookies`);
+  const pwCookies = buildPlaywrightCookies();
+  console.log(`   🍪 Prepared ${pwCookies.length} cookies for Playwright`);
 
   const browser = await chromium.launch({
     headless: true,
@@ -227,195 +265,272 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
     const context = await browser.newContext({
       viewport: { width: 1280, height: 900 },
       userAgent: USER_AGENT,
-      storageState,
     });
 
-    const page = await context.newPage();
+    // Add cookies to context — used by both context.request and page navigation
+    await context.addCookies(pwCookies);
 
-    // Set up network interception to capture the editor hash
     let capturedHash: string | null = null;
 
-    page.on('response', async (response) => {
-      const url = response.url();
-      if (!url.includes('al_articles.php')) return;
-
-      try {
-        const body = await response.text();
-        const json = JSON.parse(body);
-        const payload = json?.payload;
-
-        // We want a NON-code-3 response (code 0 = success)
-        if (Array.isArray(payload) && payload.length >= 2) {
-          const code = payload[0];
-          console.log(`   📡 al_articles.php response code: ${code}`);
-          if (code !== '3' && code !== 3) {
-            // Look for hash in the payload
-            const data = payload[1];
-            if (typeof data === 'object' && data !== null) {
-              const str = JSON.stringify(data);
-              const hashMatch = str.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"/);
-              if (hashMatch) {
-                capturedHash = hashMatch[1];
-                console.log(`   🔑 Captured hash from network: ${capturedHash}`);
-              }
-            }
-          }
-        }
-      } catch {
-        // Non-JSON response, ignore
-      }
-    });
-
-    // Navigate to vk.com first to establish the session
-    console.log(`   📄 Navigating to vk.com/feed...`);
-    await page.goto('https://vk.com/feed', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30_000,
-    });
-
-    // Check we're logged in (not redirected to login)
-    const currentUrl = page.url();
-    console.log(`   📄 Current URL: ${currentUrl}`);
-    if (currentUrl.includes('login') || currentUrl.includes('authorize')) {
-      throw new Error('VK session expired — redirected to login. Re-upload cookies in Settings.');
-    }
-
-    // Now navigate to the editor
-    const editorUrl = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
-    console.log(`   📄 Opening editor: ${editorUrl}`);
-
-    await page.goto(editorUrl, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30_000,
-    });
-
-    // Wait for the editor to load (VK's JS passes access check automatically)
-    // The editor is loaded as a z-layer overlay
-    console.log(`   ⏳ Waiting for article editor to load...`);
-
-    // Wait for any of these signals that the editor is ready:
-    // 1. The editor container appears in the DOM
-    // 2. A non-code-3 response from al_articles.php is captured
-    // 3. Timeout after 20 seconds
-    const editorReady = await Promise.race([
-      page.waitForSelector('[data-article-editor], .article_edit_wrap, .articles_editor, .article-editor', {
-        timeout: 20_000,
-      }).then(() => 'selector'),
-      new Promise<string>(resolve => {
-        const interval = setInterval(() => {
-          if (capturedHash) {
-            clearInterval(interval);
-            resolve('hash');
-          }
-        }, 300);
-        setTimeout(() => {
-          clearInterval(interval);
-          resolve('timeout');
-        }, 20_000);
-      }),
-    ]).catch(() => 'timeout');
-
-    console.log(`   📋 Editor detection: ${editorReady}, hash captured: ${capturedHash ? 'yes' : 'no'}`);
-
-    // If hash wasn't captured from network, try to extract from page
-    if (!capturedHash) {
-      // Give VK a bit more time to make AJAX calls
-      await sleep(3000);
-
-      // Try to find hash in page's JavaScript variables
-      capturedHash = await page.evaluate(() => {
-        // VK stores editor config in window.cur or global vars
-        const cur = (window as any).cur;
-        if (cur?.options?.hash) return cur.options.hash as string;
-        if (cur?.hash) return cur.hash as string;
-        if (cur?.editorHash) return cur.editorHash as string;
-
-        // Check for hash in VK's article module
-        const articles = (window as any).Articles;
-        if (articles?.options?.hash) return articles.options.hash as string;
-
-        // Search through all script content for hash patterns
-        const scripts = Array.from(document.querySelectorAll('script:not([src])'));
-        for (const script of scripts) {
-          const text = script.textContent || '';
-          const match = text.match(/articles_hash["']\s*:\s*["']([a-f0-9]{14,22})["']/);
-          if (match) return match[1];
-          const match2 = text.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"[^}]*article/);
-          if (match2) return match2[1];
-        }
-
-        return null;
-      });
-
-      if (capturedHash) {
-        console.log(`   🔑 Found hash in page JS: ${capturedHash}`);
-      }
-    }
-
-    // If still no hash, try making the AJAX call from within the browser
-    if (!capturedHash) {
-      console.log(`   📡 Trying AJAX call from within browser...`);
-      capturedHash = await page.evaluate(async (params) => {
-        const body = new URLSearchParams({
+    // ── Strategy 1: context.request (HTTP client, no navigation, no redirects) ──
+    console.log(`\n   ── Strategy 1: context.request API (no navigation) ──`);
+    try {
+      const apiResp = await context.request.post('https://vk.com/al_articles.php', {
+        form: {
           act: 'edit',
           al: '1',
           article_id: '0',
-          article_owner_id: `-${params.groupId}`,
+          article_owner_id: `-${groupId}`,
+        },
+        headers: {
+          'X-Requested-With': 'XMLHttpRequest',
+          'Origin': 'https://vk.com',
+          'Referer': `https://vk.com/${screenName}`,
+        },
+      });
+
+      const apiText = await apiResp.text();
+      console.log(`   📡 API: status=${apiResp.status()}, ${apiText.length} bytes`);
+
+      const parsed = extractHashFromPayload(apiText);
+      console.log(`   📋 code=${parsed.code}, hash=${parsed.hash || 'N/A'}`);
+      if (!parsed.hash) console.log(`   📋 payload: ${parsed.rawPayload}`);
+
+      if (parsed.hash) {
+        capturedHash = parsed.hash;
+        console.log(`   ✅ Hash via context.request: ${capturedHash}`);
+      } else if (parsed.code === '3' || parsed.code === 3) {
+        console.log(`   ⚠️ Code 3 (access-check) — need browser JS to resolve`);
+
+        // Try sending the access-check hash back for resolution
+        const ac3Data = (() => { try { return JSON.parse(apiText)?.payload?.[1]; } catch { return null; } })();
+        const ac3Hash = Array.isArray(ac3Data) ? ac3Data[0] : null;
+        if (ac3Hash) {
+          console.log(`   🔑 Access-check hash: ${ac3Hash}`);
+
+          // Attempt 1: retry with hash param
+          try {
+            const retryResp = await context.request.post('https://vk.com/al_articles.php', {
+              form: {
+                act: 'edit',
+                al: '1',
+                article_id: '0',
+                article_owner_id: `-${groupId}`,
+                hash: ac3Hash,
+              },
+              headers: {
+                'X-Requested-With': 'XMLHttpRequest',
+                'Origin': 'https://vk.com',
+                'Referer': `https://vk.com/${screenName}`,
+              },
+            });
+            const retryText = await retryResp.text();
+            const retryParsed = extractHashFromPayload(retryText);
+            console.log(`   📋 Retry with hash: code=${retryParsed.code}, hash=${retryParsed.hash || 'N/A'}`);
+            if (retryParsed.hash) capturedHash = retryParsed.hash;
+          } catch (e: any) {
+            console.log(`   ⚠️ Retry failed: ${e.message}`);
+          }
+
+          // Attempt 2: al_ac.php
+          if (!capturedHash) {
+            try {
+              const acResp = await context.request.post('https://vk.com/al_ac.php', {
+                form: { act: 'a_check', al: '1', hash: ac3Hash },
+                headers: {
+                  'X-Requested-With': 'XMLHttpRequest',
+                  'Origin': 'https://vk.com',
+                  'Referer': 'https://vk.com/',
+                },
+              });
+              console.log(`   📡 al_ac.php: status=${acResp.status()}`);
+              const acText = await acResp.text();
+              console.log(`   📋 al_ac body: ${acText.substring(0, 300)}`);
+
+              // Retry the original call after access-check
+              if (acResp.status() === 200) {
+                await sleep(500);
+                const retry2 = await context.request.post('https://vk.com/al_articles.php', {
+                  form: {
+                    act: 'edit',
+                    al: '1',
+                    article_id: '0',
+                    article_owner_id: `-${groupId}`,
+                  },
+                  headers: {
+                    'X-Requested-With': 'XMLHttpRequest',
+                    'Origin': 'https://vk.com',
+                    'Referer': `https://vk.com/${screenName}`,
+                  },
+                });
+                const retry2Parsed = extractHashFromPayload(await retry2.text());
+                console.log(`   📋 Post al_ac retry: code=${retry2Parsed.code}, hash=${retry2Parsed.hash || 'N/A'}`);
+                if (retry2Parsed.hash) capturedHash = retry2Parsed.hash;
+              }
+            } catch (e: any) {
+              console.log(`   ⚠️ al_ac.php: ${e.message}`);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      console.log(`   ⚠️ Strategy 1 error: ${err.message?.substring(0, 200)}`);
+    }
+
+    // ── Strategy 2: CDP cookie injection + page navigation ──
+    if (!capturedHash) {
+      console.log(`\n   ── Strategy 2: CDP cookies + page navigation ──`);
+      const page = await context.newPage();
+
+      try {
+        // Inject cookies via Chrome DevTools Protocol (bypasses Playwright layer)
+        const client = await context.newCDPSession(page);
+        await client.send('Network.clearBrowserCookies');
+
+        let cdpOk = 0;
+        for (const c of pwCookies) {
+          try {
+            await client.send('Network.setCookie', {
+              name: c.name,
+              value: c.value,
+              domain: c.domain,
+              path: c.path,
+              secure: c.secure,
+              httpOnly: c.httpOnly,
+              sameSite: c.sameSite,
+              expires: c.expires > 0 ? c.expires : undefined,
+            });
+            cdpOk++;
+          } catch (e: any) {
+            console.log(`   ⚠️ CDP setCookie(${c.name}): ${e.message}`);
+          }
+        }
+        console.log(`   🍪 CDP: ${cdpOk}/${pwCookies.length} cookies set`);
+
+        // Track redirect chain
+        let redirectCount = 0;
+        const redirectChain: string[] = [];
+        page.on('request', (request) => {
+          if (request.isNavigationRequest()) {
+            const prev = request.redirectedFrom();
+            if (prev) {
+              redirectCount++;
+              redirectChain.push(`${prev.url()} → ${request.url()}`);
+              if (redirectCount <= 5) {
+                console.log(`   🔄 [${redirectCount}] ${prev.url()} → ${request.url()}`);
+              }
+            }
+          }
         });
 
-        const res = await fetch('/al_articles.php', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-            'X-Requested-With': 'XMLHttpRequest',
-          },
-          body,
+        // Intercept al_articles.php responses for hash capture
+        page.on('response', async (response) => {
+          if (!response.url().includes('al_articles.php')) return;
+          try {
+            const body = await response.text();
+            const parsed = extractHashFromPayload(body);
+            if (parsed.hash) {
+              capturedHash = parsed.hash;
+              console.log(`   🔑 Hash from network intercept: ${capturedHash}`);
+            }
+          } catch {}
         });
 
-        const text = await res.text();
-        const json = JSON.parse(text);
-        const payload = json?.payload;
-
-        if (Array.isArray(payload) && payload.length >= 2 && payload[0] !== '3' && payload[0] !== 3) {
-          const data = payload[1];
-          const str = JSON.stringify(data);
-          const match = str.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"/);
-          if (match) return match[1];
+        // Navigate to blank.php (lightest VK page)
+        console.log(`   📄 Navigating to vk.com/blank.php...`);
+        try {
+          await page.goto('https://vk.com/blank.php', {
+            waitUntil: 'commit',
+            timeout: 15_000,
+          });
+          console.log(`   📄 Landed: ${page.url()}`);
+        } catch (navErr: any) {
+          console.log(`   ⚠️ blank.php failed: ${navErr.message?.substring(0, 150)}`);
+          console.log(`   🔄 Redirects: ${redirectCount} total`);
+          if (redirectChain.length > 0) {
+            console.log(`   🔄 First redirect: ${redirectChain[0]}`);
+          }
         }
 
-        return null;
-      }, { groupId });
+        // If we landed on VK, open the article editor overlay
+        if (page.url().includes('vk.com') && !capturedHash) {
+          const editorUrl = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
+          console.log(`   📄 Opening editor: ${editorUrl}`);
+          try {
+            await page.goto(editorUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: 25_000,
+            });
+            // Wait for hash from network intercept
+            for (let i = 0; i < 30 && !capturedHash; i++) {
+              await sleep(500);
+            }
+          } catch (navErr: any) {
+            console.log(`   ⚠️ Editor nav: ${navErr.message?.substring(0, 150)}`);
+          }
+        }
 
-      if (capturedHash) {
-        console.log(`   🔑 Found hash via in-browser AJAX: ${capturedHash}`);
+        // ── Strategy 3: In-page AJAX ──
+        if (!capturedHash && page.url().includes('vk.com')) {
+          console.log(`\n   ── Strategy 3: In-page AJAX from ${page.url()} ──`);
+          try {
+            const result = await page.evaluate(async (params) => {
+              try {
+                const body = new URLSearchParams({
+                  act: 'edit',
+                  al: '1',
+                  article_id: '0',
+                  article_owner_id: `-${params.groupId}`,
+                });
+                const res = await fetch('/al_articles.php', {
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded',
+                    'X-Requested-With': 'XMLHttpRequest',
+                  },
+                  body,
+                  credentials: 'include',
+                });
+                return { status: res.status, body: (await res.text()).substring(0, 2000) };
+              } catch (e: any) {
+                return { error: e.message };
+              }
+            }, { groupId });
+
+            console.log(`   📡 AJAX: status=${result.status || 'ERR'}`);
+            if (result.body) {
+              const parsed = extractHashFromPayload(result.body);
+              console.log(`   📋 code=${parsed.code}, hash=${parsed.hash || 'N/A'}`);
+              if (parsed.hash) capturedHash = parsed.hash;
+              if (!parsed.hash) console.log(`   📋 payload: ${parsed.rawPayload}`);
+            } else {
+              console.log(`   ⚠️ AJAX error: ${result.error}`);
+            }
+          } catch (e: any) {
+            console.log(`   ⚠️ page.evaluate error: ${e.message}`);
+          }
+        }
+
+        await page.close();
+      } catch (err: any) {
+        console.log(`   ⚠️ Strategy 2 error: ${err.message?.substring(0, 200)}`);
       }
     }
 
-    // Extract all cookies from browser context
+    // Capture final cookies
     const browserCookies = await context.cookies('https://vk.com');
-    const cookieString = browserCookies
-      .map(c => `${c.name}=${c.value}`)
-      .join('; ');
-
-    console.log(`   🍪 Captured ${browserCookies.length} cookies from browser`);
+    const cookieString = browserCookies.map(c => `${c.name}=${c.value}`).join('; ');
+    console.log(`   🍪 Final: ${browserCookies.length} cookies in browser jar`);
 
     if (!capturedHash) {
-      // Last resort: take a screenshot for debugging
-      const screenshotPath = '/tmp/vk-editor-debug.png';
-      await page.screenshot({ path: screenshotPath, fullPage: true });
-      console.log(`   📸 Debug screenshot saved: ${screenshotPath}`);
-
-      // Log page URL and title
-      console.log(`   📄 Page URL: ${page.url()}`);
-      console.log(`   📄 Page title: ${await page.title()}`);
-
       throw new Error(
-        'Could not extract VK editor hash via Playwright. ' +
-          'The editor may not have loaded. Check debug screenshot.'
+        'Could not extract VK editor hash. All 3 strategies failed. ' +
+        'Check logs above for diagnosis: expired cookies? code-3 access check? redirect loop?'
       );
     }
 
-    return { hash: capturedHash, cookies: cookieString };
+    console.log(`   ✅ VK editor hash obtained: ${capturedHash}`);
+    return { hash: capturedHash, cookies: cookieString || cookieHeader };
   } finally {
     await browser.close();
     console.log(`   🎭 Browser closed`);
