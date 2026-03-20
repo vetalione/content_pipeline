@@ -157,7 +157,7 @@ async function getGroupScreenName(): Promise<string> {
 
 /**
  * Load VK cookies from vk-state.json and convert to Playwright format.
- * EditThisCookie exports: { name, value, domain, path, expires/expirationDate, ... }
+ * EditThisCookie exports: { name, value, domain, path, expires/expirationDate, sameSite, ... }
  * Playwright expects:     { name, value, domain, path, expires, httpOnly, secure, sameSite }
  */
 function loadVkCookiesForPlaywright(): Array<{
@@ -176,18 +176,43 @@ function loadVkCookiesForPlaywright(): Array<{
   const session = JSON.parse(fs.readFileSync(VK_STATE_FILE, 'utf-8'));
   const rawCookies: any[] = session.cookies || [];
 
-  return rawCookies
-    .filter((c: any) => c.domain && (c.domain.includes('vk.com') || c.domain.includes('.vk.com')))
-    .map((c: any) => ({
+  const vkCookies = rawCookies
+    .filter((c: any) => c.domain && (c.domain.includes('vk.com') || c.domain.includes('.vk.com')));
+
+  console.log(`   🍪 Raw VK cookies: ${vkCookies.length} (total in file: ${rawCookies.length})`);
+
+  return vkCookies.map((c: any) => {
+    // Playwright requires domain to NOT start with '.' for exact match
+    // but VK cookies from EditThisCookie usually have '.vk.com'
+    // Keep the domain as-is (Playwright handles both formats)
+    let domain = c.domain || '.vk.com';
+
+    // sameSite handling: EditThisCookie uses 'no_restriction', 'unspecified', 'lax', 'strict'
+    // Playwright uses 'Strict', 'Lax', 'None'
+    const rawSameSite = (c.sameSite || '').toString().toLowerCase();
+    let sameSite: 'Strict' | 'Lax' | 'None';
+    if (rawSameSite === 'strict') {
+      sameSite = 'Strict';
+    } else if (rawSameSite === 'none' || rawSameSite === 'no_restriction') {
+      sameSite = 'None';
+    } else {
+      sameSite = 'Lax';
+    }
+
+    // sameSite: None requires secure: true
+    const secure = sameSite === 'None' ? true : (c.secure ?? false);
+
+    return {
       name: c.name,
       value: c.value,
-      domain: c.domain.startsWith('.') ? c.domain : `.${c.domain}`,
+      domain,
       path: c.path || '/',
       expires: c.expires ?? c.expirationDate ?? -1,
       httpOnly: c.httpOnly ?? false,
-      secure: c.secure !== false,
-      sameSite: (c.sameSite === 'strict' ? 'Strict' : c.sameSite === 'lax' ? 'Lax' : 'None') as 'Strict' | 'Lax' | 'None',
-    }));
+      secure,
+      sameSite,
+    };
+  });
 }
 
 /**
@@ -253,9 +278,24 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
       }
     });
 
-    // Navigate to the group page with article editor overlay
+    // Navigate: first go to vk.com to establish session, then open the editor overlay
+    // Going directly to the z=article_edit URL can cause redirect loops
+    console.log(`   📄 Navigating to vk.com to establish session...`);
+    await page.goto('https://vk.com/feed', {
+      waitUntil: 'domcontentloaded',
+      timeout: 30_000,
+    });
+
+    // Check we're logged in (not redirected to login)
+    const currentUrl = page.url();
+    console.log(`   📄 Current URL: ${currentUrl}`);
+    if (currentUrl.includes('login') || currentUrl.includes('authorize')) {
+      throw new Error('VK session expired — redirected to login. Re-upload cookies in Settings.');
+    }
+
+    // Now navigate to the editor
     const editorUrl = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
-    console.log(`   📄 Navigating to: ${editorUrl}`);
+    console.log(`   📄 Opening editor: ${editorUrl}`);
 
     await page.goto(editorUrl, {
       waitUntil: 'domcontentloaded',
