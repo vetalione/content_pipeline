@@ -154,14 +154,92 @@ async function getGroupScreenName(): Promise<string> {
 
 // ── CSRF Hash ──────────────────────────────────────────────────────────────────
 
-/** Fetch the VK editor page and extract the CSRF hash needed for al_articles.php */
+/**
+ * Fetch the VK articles editor hash needed for al_articles.php?act=save.
+ *
+ * VK loads the article editor as an AJAX overlay (z-layer).
+ * The hash is NOT in the initial page HTML — it's returned via an internal
+ * AJAX endpoint. We try multiple approaches:
+ * 1. POST al_articles.php?act=edit (AJAX-style) — returns editor config with hash
+ * 2. POST al_articles.php?act=stats_vars — lighter endpoint that may return hash
+ * 3. Fetch full page HTML and parse (fallback)
+ */
 async function fetchEditorHash(cookieHeader: string): Promise<string> {
   const groupId = getGroupId();
   const screenName = await getGroupScreenName();
 
-  console.log(`   📄 Fetching editor page for /${screenName}...`);
+  console.log(`   🔑 Fetching article editor hash for /${screenName}...`);
 
-  // Fetch the group page with article editor overlay
+  // ── Approach 1: AJAX call to al_articles.php like VK's SPA does
+  const ajaxEndpoints = [
+    { act: 'edit', desc: 'edit' },
+    { act: 'stats_vars', desc: 'stats_vars' },
+    { act: 'get_editor', desc: 'get_editor' },
+  ];
+
+  for (const ep of ajaxEndpoints) {
+    try {
+      console.log(`   📡 Trying al_articles.php?act=${ep.act}...`);
+      const referer = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
+      const body = new URLSearchParams({
+        act: ep.act,
+        al: '1',
+        article_id: '0',
+        article_owner_id: `-${groupId}`,
+      });
+
+      const res = await fetch('https://vk.com/al_articles.php', {
+        method: 'POST',
+        headers: vkBrowserHeaders(cookieHeader, referer),
+        body,
+      });
+
+      if (!res.ok) {
+        console.log(`   ⚠️ ${ep.desc}: HTTP ${res.status}`);
+        continue;
+      }
+
+      const text = await res.text();
+      console.log(`   📄 ${ep.desc} response: ${text.length} chars`);
+
+      // Look for hex hash in the response (16-20 char hex strings)
+      // VK article hashes are typically 18-20 hex chars
+      const hashPatterns = [
+        /"hash"\s*:\s*"([a-f0-9]{16,22})"/gi,
+        /["']hash["']\s*:\s*["']([a-f0-9]{16,22})["']/gi,
+        /hash=([a-f0-9]{16,22})/gi,
+      ];
+
+      for (const pattern of hashPatterns) {
+        const matches = [...text.matchAll(pattern)];
+        for (const m of matches) {
+          // Skip known non-article hashes
+          const hash = m[1];
+          if (hash.length >= 16 && hash.length <= 22) {
+            console.log(`   🔑 Found hash via ${ep.desc}: ${hash}`);
+            return hash;
+          }
+        }
+      }
+
+      // Log a snippet for debugging
+      if (text.length > 0 && text.length < 2000) {
+        console.log(`   📋 Full response: ${text.substring(0, 500)}`);
+      } else if (text.length >= 2000) {
+        console.log(`   📋 Response start: ${text.substring(0, 300)}`);
+        // Search for "hash" context
+        const hashIdx = text.indexOf('hash');
+        if (hashIdx >= 0) {
+          console.log(`   📋 Hash context: ...${text.substring(Math.max(0, hashIdx - 50), hashIdx + 100)}...`);
+        }
+      }
+    } catch (err: any) {
+      console.log(`   ⚠️ ${ep.desc} failed: ${err.message}`);
+    }
+  }
+
+  // ── Approach 2: Fetch the full group page and look for the hash in embedded data
+  console.log('   📄 Fallback: fetching full page HTML...');
   const pageUrl = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
   const res = await fetch(pageUrl, {
     headers: {
@@ -184,66 +262,31 @@ async function fetchEditorHash(cookieHeader: string): Promise<string> {
   const html = await res.text();
   console.log(`   📄 Got page HTML: ${html.length} chars`);
 
-  // Try patterns to find the articles editor hash
-  const patterns = [
-    /articles_hash["']\s*:\s*["']([a-f0-9]{14,22})["']/i,
-    /articleHash["':\s]+["']([a-f0-9]{14,22})["']/i,
-    /"hash"\s*:\s*"([a-f0-9]{14,22})"\s*,\s*"?article/i,
-    /Articles\.init\(\{[^}]*hash["':\s]+["']([a-f0-9]{14,22})["']/i,
-    /extend\(cur\s*,\s*\{[^}]*?["']?hash["']?\s*:\s*["']([a-f0-9]{14,22})["']/i,
-    /cur\.options\s*=\s*\{[^}]*?hash["':\s]+["']([a-f0-9]{14,22})["']/s,
+  // Try to find hash in HTML (may be in inline scripts or data attributes)
+  const htmlHashPatterns = [
+    /articles_hash["']\s*:\s*["']([a-f0-9]{16,22})["']/i,
+    /articleHash["':\s]+["']([a-f0-9]{16,22})["']/i,
+    /"hash"\s*:\s*"([a-f0-9]{16,22})"\s*,\s*"?article/i,
+    /Articles[^{]*\{[^}]*?hash["':\s]+["']([a-f0-9]{16,22})["']/i,
+    /extend\(cur\s*,\s*\{[^}]*?hash["':\s]+["']([a-f0-9]{16,22})["']/i,
   ];
 
-  for (const pattern of patterns) {
+  for (const pattern of htmlHashPatterns) {
     const match = html.match(pattern);
     if (match) {
-      console.log(`   🔑 Found hash: ${match[1]}`);
+      console.log(`   🔑 Found hash in HTML: ${match[1]}`);
       return match[1];
     }
   }
 
-  // Broader search: look for hex strings near "articles" keyword
-  const articlesSection = html.match(/articles[^{]*\{[^}]{0,500}/gi);
-  if (articlesSection) {
-    for (const section of articlesSection) {
-      const hashMatch = section.match(/["']([a-f0-9]{14,22})["']/);
-      if (hashMatch) {
-        console.log(`   🔑 Found hash (broad): ${hashMatch[1]}`);
-        return hashMatch[1];
-      }
-    }
-  }
-
-  // Last resort: look for any 16-20 char hex string in common VK patterns
-  const vkHashPatterns = html.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"/g);
-  if (vkHashPatterns && vkHashPatterns.length > 0) {
-    const firstMatch = vkHashPatterns[0].match(/"([a-f0-9]{14,22})"/);
-    if (firstMatch) {
-      console.log(`   🔑 Found hash (fallback): ${firstMatch[1]}`);
-      return firstMatch[1];
-    }
-  }
-
-  // DEBUG: dump all occurrences of "hash" with surrounding context
-  console.log('   ⚠️ DEBUG: Could not find hash. Dumping all "hash" contexts from HTML:');
-  const hashContexts = [...html.matchAll(/(.{0,80}hash.{0,80})/gi)];
-  const seen = new Set<string>();
-  for (const m of hashContexts.slice(0, 30)) {
-    const snippet = m[1].replace(/\s+/g, ' ').trim();
-    if (!seen.has(snippet)) {
-      seen.add(snippet);
-      console.log(`     ... ${snippet} ...`);
-    }
-  }
-
-  // Also check if the page is a login redirect or error
+  // Check if page is a login redirect
   if (html.includes('login_page') || html.includes('al_login')) {
     throw new Error('VK session expired — page redirected to login. Re-upload cookies in Settings.');
   }
 
   throw new Error(
-    'Could not extract VK articles hash from page HTML. Check cookies validity. ' +
-      `Page size: ${html.length} chars, URL: ${pageUrl}`
+    'Could not extract VK articles hash. The editor data is loaded dynamically via AJAX. ' +
+      `Page size: ${html.length} chars`
   );
 }
 
