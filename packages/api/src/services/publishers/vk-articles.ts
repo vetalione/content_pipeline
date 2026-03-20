@@ -242,10 +242,11 @@ function extractHashFromPayload(body: string): { hash: string | null; code: stri
 /**
  * Extract the VK articles editor CSRF hash using Playwright.
  *
- * Three strategies (tried in order):
- * 1. context.request API — Playwright's HTTP client with cookie jar, NO page navigation
- * 2. CDP cookie injection + page navigation — most reliable browser cookie layer
- * 3. In-page AJAX — if we land on vk.com, use fetch() inside the page context
+ * Phased approach:
+ * Phase 1: CDP cookies → navigate to blank.php (completes login verification chain)
+ * Phase 2: In-page AJAX from blank.php (session is now verified, avoids challenge)
+ * Phase 3: If code 3 → navigate to login.vk.com for access-check resolution → retry AJAX
+ * Phase 4: Navigate to article editor URL as last resort (may trigger challenge.html)
  */
 async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; cookies: string }> {
   const groupId = getGroupId();
@@ -267,265 +268,263 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
       userAgent: USER_AGENT,
     });
 
-    // Add cookies to context — used by both context.request and page navigation
-    await context.addCookies(pwCookies);
+    const page = await context.newPage();
+
+    // ── Inject cookies via CDP (most reliable method) ──
+    const client = await context.newCDPSession(page);
+    let cdpOk = 0;
+    for (const c of pwCookies) {
+      try {
+        await client.send('Network.setCookie', {
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path,
+          secure: c.secure,
+          httpOnly: c.httpOnly,
+          sameSite: c.sameSite,
+          expires: c.expires > 0 ? c.expires : undefined,
+        });
+        cdpOk++;
+      } catch {}
+    }
+    console.log(`   🍪 CDP: ${cdpOk}/${pwCookies.length} cookies set`);
+
+    // Track redirects
+    page.on('request', (request) => {
+      if (request.isNavigationRequest()) {
+        const prev = request.redirectedFrom();
+        if (prev) {
+          console.log(`   🔄 ${prev.url().substring(0, 100)} → ${request.url().substring(0, 100)}`);
+        }
+      }
+    });
 
     let capturedHash: string | null = null;
 
-    // ── Strategy 1: context.request (HTTP client, no navigation, no redirects) ──
-    console.log(`\n   ── Strategy 1: context.request API (no navigation) ──`);
+    // ── Phase 1: Navigate to blank.php to establish verified session ──
+    // This completes VK's login redirect chain (blank.php → login.vk.com → login.php → blank.php)
+    // which sets additional cookies needed for API calls.
+    console.log(`\n   ── Phase 1: Establish session via blank.php ──`);
+    let sessionEstablished = false;
     try {
-      const apiResp = await context.request.post('https://vk.com/al_articles.php', {
-        form: {
+      await page.goto('https://vk.com/blank.php', {
+        waitUntil: 'domcontentloaded',
+        timeout: 20_000,
+      });
+      const url = page.url();
+      console.log(`   📄 Landed: ${url}`);
+      sessionEstablished = url.includes('vk.com') && !url.includes('login.vk.com');
+    } catch (err: any) {
+      console.log(`   ⚠️ blank.php: ${err.message?.substring(0, 150)}`);
+    }
+
+    if (!sessionEstablished) {
+      // Capture cookies for diagnostics even on failure
+      const bc = await context.cookies('https://vk.com');
+      const cs = bc.map(c => `${c.name}=${c.value}`).join('; ');
+      throw new Error(
+        `Could not establish VK session — blank.php navigation failed. ` +
+        `Landed on: ${page.url()}. Cookies may be expired or invalid.`
+      );
+    }
+
+    // ── Phase 2: In-page AJAX from blank.php ──
+    // The session is now verified (login chain completed). AJAX calls from this page
+    // use the full verified cookie set. This avoids the challenge.html trigger that
+    // only appears on page NAVIGATION to the editor URL.
+    console.log(`\n   ── Phase 2: In-page AJAX from blank.php ──`);
+
+    const ajaxResult = await page.evaluate(async (params) => {
+      try {
+        const body = new URLSearchParams({
           act: 'edit',
           al: '1',
           article_id: '0',
-          article_owner_id: `-${groupId}`,
-        },
-        headers: {
-          'X-Requested-With': 'XMLHttpRequest',
-          'Origin': 'https://vk.com',
-          'Referer': `https://vk.com/${screenName}`,
-        },
-      });
+          article_owner_id: `-${params.groupId}`,
+        });
+        const res = await fetch('/al_articles.php', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'X-Requested-With': 'XMLHttpRequest',
+          },
+          body,
+          credentials: 'include',
+        });
+        return { status: res.status, body: await res.text() };
+      } catch (e: any) {
+        return { error: e.message };
+      }
+    }, { groupId });
 
-      const apiText = await apiResp.text();
-      console.log(`   📡 API: status=${apiResp.status()}, ${apiText.length} bytes`);
-
-      const parsed = extractHashFromPayload(apiText);
+    if (ajaxResult.error) {
+      console.log(`   ⚠️ AJAX error: ${ajaxResult.error}`);
+    } else {
+      console.log(`   📡 AJAX: status=${ajaxResult.status}, ${ajaxResult.body?.length} bytes`);
+      const parsed = extractHashFromPayload(ajaxResult.body!);
       console.log(`   📋 code=${parsed.code}, hash=${parsed.hash || 'N/A'}`);
       if (!parsed.hash) console.log(`   📋 payload: ${parsed.rawPayload}`);
 
       if (parsed.hash) {
         capturedHash = parsed.hash;
-        console.log(`   ✅ Hash via context.request: ${capturedHash}`);
-      } else if (parsed.code === '3' || parsed.code === 3) {
-        console.log(`   ⚠️ Code 3 (access-check) — need browser JS to resolve`);
+        console.log(`   ✅ Hash via in-page AJAX: ${capturedHash}`);
+      }
+    }
 
-        // Try sending the access-check hash back for resolution
-        const ac3Data = (() => { try { return JSON.parse(apiText)?.payload?.[1]; } catch { return null; } })();
-        const ac3Hash = Array.isArray(ac3Data) ? ac3Data[0] : null;
-        if (ac3Hash) {
-          console.log(`   🔑 Access-check hash: ${ac3Hash}`);
+    // ── Phase 3: If code 3, navigate to login.vk.com for access-check → retry ──
+    if (!capturedHash && ajaxResult.body) {
+      const initialParsed = extractHashFromPayload(ajaxResult.body);
+      if (initialParsed.code === '3' || initialParsed.code === 3) {
+        console.log(`\n   ── Phase 3: Resolve access-check via login.vk.com ──`);
 
-          // Attempt 1: retry with hash param
-          try {
-            const retryResp = await context.request.post('https://vk.com/al_articles.php', {
-              form: {
-                act: 'edit',
-                al: '1',
-                article_id: '0',
-                article_owner_id: `-${groupId}`,
-                hash: ac3Hash,
-              },
-              headers: {
-                'X-Requested-With': 'XMLHttpRequest',
-                'Origin': 'https://vk.com',
-                'Referer': `https://vk.com/${screenName}`,
-              },
-            });
-            const retryText = await retryResp.text();
-            const retryParsed = extractHashFromPayload(retryText);
-            console.log(`   📋 Retry with hash: code=${retryParsed.code}, hash=${retryParsed.hash || 'N/A'}`);
-            if (retryParsed.hash) capturedHash = retryParsed.hash;
-          } catch (e: any) {
-            console.log(`   ⚠️ Retry failed: ${e.message}`);
+        // Extract access-check hash from code-3 payload
+        let acHash: string | null = null;
+        try {
+          const payload = JSON.parse(ajaxResult.body)?.payload?.[1];
+          if (Array.isArray(payload)) {
+            // Payload[0] is hash (may have surrounding quotes)
+            acHash = String(payload[0]).replace(/"/g, '');
           }
+        } catch {}
 
-          // Attempt 2: al_ac.php
-          if (!capturedHash) {
-            try {
-              const acResp = await context.request.post('https://vk.com/al_ac.php', {
-                form: { act: 'a_check', al: '1', hash: ac3Hash },
-                headers: {
-                  'X-Requested-With': 'XMLHttpRequest',
-                  'Origin': 'https://vk.com',
-                  'Referer': 'https://vk.com/',
-                },
-              });
-              console.log(`   📡 al_ac.php: status=${acResp.status()}`);
-              const acText = await acResp.text();
-              console.log(`   📋 al_ac body: ${acText.substring(0, 300)}`);
+        if (acHash) {
+          console.log(`   🔑 Access-check hash (ip_h): ${acHash}`);
 
-              // Retry the original call after access-check
-              if (acResp.status() === 200) {
-                await sleep(500);
-                const retry2 = await context.request.post('https://vk.com/al_articles.php', {
-                  form: {
+          // Navigate to login.vk.com fast_return — same flow that blank.php uses
+          // This resolves the access check by going through VK's login verification
+          const verifyUrl = `https://login.vk.com/?role=fast_return&_origin=https://vk.com&ip_h=${encodeURIComponent(acHash)}&to=YmxhbmsucGhw`;
+          console.log(`   🔄 Navigating to login.vk.com for verification...`);
+
+          try {
+            await page.goto(verifyUrl, {
+              waitUntil: 'domcontentloaded',
+              timeout: 20_000,
+            });
+            console.log(`   📄 After verify: ${page.url()}`);
+
+            // If we're back on vk.com, the access check succeeded
+            if (page.url().includes('vk.com') && !page.url().includes('login.vk.com')) {
+              console.log(`   ✅ Access-check resolved! Retrying AJAX...`);
+              await sleep(1000);
+
+              const retryResult = await page.evaluate(async (params) => {
+                try {
+                  const body = new URLSearchParams({
                     act: 'edit',
                     al: '1',
                     article_id: '0',
-                    article_owner_id: `-${groupId}`,
-                  },
-                  headers: {
-                    'X-Requested-With': 'XMLHttpRequest',
-                    'Origin': 'https://vk.com',
-                    'Referer': `https://vk.com/${screenName}`,
-                  },
-                });
-                const retry2Parsed = extractHashFromPayload(await retry2.text());
-                console.log(`   📋 Post al_ac retry: code=${retry2Parsed.code}, hash=${retry2Parsed.hash || 'N/A'}`);
-                if (retry2Parsed.hash) capturedHash = retry2Parsed.hash;
+                    article_owner_id: `-${params.groupId}`,
+                  });
+                  const res = await fetch('/al_articles.php', {
+                    method: 'POST',
+                    headers: {
+                      'Content-Type': 'application/x-www-form-urlencoded',
+                      'X-Requested-With': 'XMLHttpRequest',
+                    },
+                    body,
+                    credentials: 'include',
+                  });
+                  return { status: res.status, body: await res.text() };
+                } catch (e: any) {
+                  return { error: e.message };
+                }
+              }, { groupId });
+
+              if (retryResult.body) {
+                const retryParsed = extractHashFromPayload(retryResult.body);
+                console.log(`   📋 Post-verify: code=${retryParsed.code}, hash=${retryParsed.hash || 'N/A'}`);
+                if (!retryParsed.hash) console.log(`   📋 payload: ${retryParsed.rawPayload}`);
+                if (retryParsed.hash) {
+                  capturedHash = retryParsed.hash;
+                  console.log(`   ✅ Hash after access-check: ${capturedHash}`);
+                }
+              } else if (retryResult.error) {
+                console.log(`   ⚠️ Post-verify AJAX error: ${retryResult.error}`);
               }
-            } catch (e: any) {
-              console.log(`   ⚠️ al_ac.php: ${e.message}`);
+            } else {
+              console.log(`   ⚠️ Still not on vk.com after verify: ${page.url()}`);
             }
+          } catch (err: any) {
+            console.log(`   ⚠️ Verify navigation: ${err.message?.substring(0, 150)}`);
           }
         }
       }
-    } catch (err: any) {
-      console.log(`   ⚠️ Strategy 1 error: ${err.message?.substring(0, 200)}`);
     }
 
-    // ── Strategy 2: CDP cookie injection + page navigation ──
+    // ── Phase 4: Navigate to editor as last resort ──
     if (!capturedHash) {
-      console.log(`\n   ── Strategy 2: CDP cookies + page navigation ──`);
-      const page = await context.newPage();
+      console.log(`\n   ── Phase 4: Navigate to editor (last resort) ──`);
+
+      // Intercept al_articles.php responses for hash capture
+      page.on('response', async (response) => {
+        if (!response.url().includes('al_articles.php')) return;
+        try {
+          const body = await response.text();
+          const parsed = extractHashFromPayload(body);
+          if (parsed.hash && !capturedHash) {
+            capturedHash = parsed.hash;
+            console.log(`   🔑 Hash from network intercept: ${capturedHash}`);
+          }
+        } catch {}
+      });
+
+      const editorUrl = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
+      console.log(`   📄 Opening editor: ${editorUrl}`);
 
       try {
-        // Inject cookies via Chrome DevTools Protocol (bypasses Playwright layer)
-        const client = await context.newCDPSession(page);
-        await client.send('Network.clearBrowserCookies');
-
-        let cdpOk = 0;
-        for (const c of pwCookies) {
-          try {
-            await client.send('Network.setCookie', {
-              name: c.name,
-              value: c.value,
-              domain: c.domain,
-              path: c.path,
-              secure: c.secure,
-              httpOnly: c.httpOnly,
-              sameSite: c.sameSite,
-              expires: c.expires > 0 ? c.expires : undefined,
-            });
-            cdpOk++;
-          } catch (e: any) {
-            console.log(`   ⚠️ CDP setCookie(${c.name}): ${e.message}`);
-          }
-        }
-        console.log(`   🍪 CDP: ${cdpOk}/${pwCookies.length} cookies set`);
-
-        // Track redirect chain
-        let redirectCount = 0;
-        const redirectChain: string[] = [];
-        page.on('request', (request) => {
-          if (request.isNavigationRequest()) {
-            const prev = request.redirectedFrom();
-            if (prev) {
-              redirectCount++;
-              redirectChain.push(`${prev.url()} → ${request.url()}`);
-              if (redirectCount <= 5) {
-                console.log(`   🔄 [${redirectCount}] ${prev.url()} → ${request.url()}`);
-              }
-            }
-          }
+        await page.goto(editorUrl, {
+          waitUntil: 'domcontentloaded',
+          timeout: 25_000,
         });
 
-        // Intercept al_articles.php responses for hash capture
-        page.on('response', async (response) => {
-          if (!response.url().includes('al_articles.php')) return;
-          try {
-            const body = await response.text();
-            const parsed = extractHashFromPayload(body);
-            if (parsed.hash) {
-              capturedHash = parsed.hash;
-              console.log(`   🔑 Hash from network intercept: ${capturedHash}`);
-            }
-          } catch {}
-        });
+        const landedUrl = page.url();
+        console.log(`   📄 Landed: ${landedUrl}`);
 
-        // Navigate to blank.php (lightest VK page)
-        console.log(`   📄 Navigating to vk.com/blank.php...`);
-        try {
-          await page.goto('https://vk.com/blank.php', {
-            waitUntil: 'commit',
-            timeout: 15_000,
-          });
-          console.log(`   📄 Landed: ${page.url()}`);
-        } catch (navErr: any) {
-          console.log(`   ⚠️ blank.php failed: ${navErr.message?.substring(0, 150)}`);
-          console.log(`   🔄 Redirects: ${redirectCount} total`);
-          if (redirectChain.length > 0) {
-            console.log(`   🔄 First redirect: ${redirectChain[0]}`);
-          }
-        }
-
-        // If we landed on VK, open the article editor overlay
-        if (page.url().includes('vk.com') && !capturedHash) {
-          const editorUrl = `https://vk.com/${screenName}?z=article_edit-${groupId}_0`;
-          console.log(`   📄 Opening editor: ${editorUrl}`);
+        // Handle challenge page
+        if (landedUrl.includes('challenge.html')) {
+          console.log(`   ⚠️ VK challenge page — attempting to handle...`);
           try {
-            await page.goto(editorUrl, {
-              waitUntil: 'domcontentloaded',
-              timeout: 25_000,
-            });
-            // Wait for hash from network intercept
-            for (let i = 0; i < 30 && !capturedHash; i++) {
-              await sleep(500);
-            }
-          } catch (navErr: any) {
-            console.log(`   ⚠️ Editor nav: ${navErr.message?.substring(0, 150)}`);
-          }
-        }
-
-        // ── Strategy 3: In-page AJAX ──
-        if (!capturedHash && page.url().includes('vk.com')) {
-          console.log(`\n   ── Strategy 3: In-page AJAX from ${page.url()} ──`);
-          try {
-            const result = await page.evaluate(async (params) => {
-              try {
-                const body = new URLSearchParams({
-                  act: 'edit',
-                  al: '1',
-                  article_id: '0',
-                  article_owner_id: `-${params.groupId}`,
-                });
-                const res = await fetch('/al_articles.php', {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/x-www-form-urlencoded',
-                    'X-Requested-With': 'XMLHttpRequest',
-                  },
-                  body,
-                  credentials: 'include',
-                });
-                return { status: res.status, body: (await res.text()).substring(0, 2000) };
-              } catch (e: any) {
-                return { error: e.message };
+            // Wait for any clickable element
+            await page.waitForSelector('button, input[type="submit"], a.flat_button', { timeout: 5_000 });
+            const buttons = await page.$$('button, input[type="submit"], a.flat_button');
+            for (const btn of buttons) {
+              const text = await btn.innerText().catch(() => '');
+              console.log(`   🔘 Button: "${text}"`);
+              if (text.match(/confirm|continue|proceed|подтвердить|продолжить|да|yes/i)) {
+                await btn.click();
+                console.log(`   ✅ Clicked: "${text}"`);
+                await page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {});
+                console.log(`   📄 After challenge: ${page.url()}`);
+                break;
               }
-            }, { groupId });
-
-            console.log(`   📡 AJAX: status=${result.status || 'ERR'}`);
-            if (result.body) {
-              const parsed = extractHashFromPayload(result.body);
-              console.log(`   📋 code=${parsed.code}, hash=${parsed.hash || 'N/A'}`);
-              if (parsed.hash) capturedHash = parsed.hash;
-              if (!parsed.hash) console.log(`   📋 payload: ${parsed.rawPayload}`);
-            } else {
-              console.log(`   ⚠️ AJAX error: ${result.error}`);
             }
-          } catch (e: any) {
-            console.log(`   ⚠️ page.evaluate error: ${e.message}`);
+          } catch {
+            console.log(`   ⚠️ No confirm button found on challenge page`);
           }
         }
 
-        await page.close();
+        // Wait for hash from network intercept
+        for (let i = 0; i < 20 && !capturedHash; i++) {
+          await sleep(500);
+        }
       } catch (err: any) {
-        console.log(`   ⚠️ Strategy 2 error: ${err.message?.substring(0, 200)}`);
+        console.log(`   ⚠️ Editor nav: ${err.message?.substring(0, 150)}`);
       }
     }
 
-    // Capture final cookies
+    // Capture final cookies from browser jar
     const browserCookies = await context.cookies('https://vk.com');
     const cookieString = browserCookies.map(c => `${c.name}=${c.value}`).join('; ');
-    console.log(`   🍪 Final: ${browserCookies.length} cookies in browser jar`);
+    console.log(`   🍪 Final: ${browserCookies.length} cookies`);
+
+    await page.close();
 
     if (!capturedHash) {
       throw new Error(
-        'Could not extract VK editor hash. All 3 strategies failed. ' +
-        'Check logs above for diagnosis: expired cookies? code-3 access check? redirect loop?'
+        'Could not extract VK editor hash. All phases failed. ' +
+        'Check logs: likely VK challenge page requires human interaction, ' +
+        'or cookies are expired/invalid.'
       );
     }
 
