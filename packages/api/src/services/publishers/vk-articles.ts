@@ -156,20 +156,11 @@ async function getGroupScreenName(): Promise<string> {
 // ── CSRF Hash via Playwright ───────────────────────────────────────────────────
 
 /**
- * Load VK cookies from vk-state.json and convert to Playwright format.
- * EditThisCookie exports: { name, value, domain, path, expires/expirationDate, sameSite, ... }
- * Playwright expects:     { name, value, domain, path, expires, httpOnly, secure, sameSite }
+ * Build Playwright storageState from vk-state.json cookies.
+ * This is the same format Playwright uses for context({ storageState }) —
+ * proven to work with Dzen publisher.
  */
-function loadVkCookiesForPlaywright(): Array<{
-  name: string;
-  value: string;
-  domain: string;
-  path: string;
-  expires: number;
-  httpOnly: boolean;
-  secure: boolean;
-  sameSite: 'Strict' | 'Lax' | 'None';
-}> {
+function buildStorageState(): { cookies: any[]; origins: any[] } {
   if (!fs.existsSync(VK_STATE_FILE)) {
     throw new Error('No VK session found. Upload cookies via Settings page first.');
   }
@@ -181,38 +172,36 @@ function loadVkCookiesForPlaywright(): Array<{
 
   console.log(`   🍪 Raw VK cookies: ${vkCookies.length} (total in file: ${rawCookies.length})`);
 
-  return vkCookies.map((c: any) => {
-    // Playwright requires domain to NOT start with '.' for exact match
-    // but VK cookies from EditThisCookie usually have '.vk.com'
-    // Keep the domain as-is (Playwright handles both formats)
-    let domain = c.domain || '.vk.com';
+  // Log a few key cookies for debugging
+  const keyNames = ['remixsid', 'remixnsid', 'remixlang', 'remixdt', 'remixua'];
+  for (const name of keyNames) {
+    const c = vkCookies.find((ck: any) => ck.name === name);
+    if (c) console.log(`   🍪 ${c.name}: domain=${c.domain}, sameSite=${c.sameSite}, secure=${c.secure}`);
+  }
 
-    // sameSite handling: EditThisCookie uses 'no_restriction', 'unspecified', 'lax', 'strict'
-    // Playwright uses 'Strict', 'Lax', 'None'
-    const rawSameSite = (c.sameSite || '').toString().toLowerCase();
+  const cookies = vkCookies.map((c: any) => {
+    // sameSite: Playwright expects 'Strict', 'Lax', or 'None'
+    // The cookies may already be converted (from Settings upload) or raw from EditThisCookie
+    const rawSS = (c.sameSite || 'Lax').toString();
     let sameSite: 'Strict' | 'Lax' | 'None';
-    if (rawSameSite === 'strict') {
-      sameSite = 'Strict';
-    } else if (rawSameSite === 'none' || rawSameSite === 'no_restriction') {
-      sameSite = 'None';
-    } else {
-      sameSite = 'Lax';
-    }
-
-    // sameSite: None requires secure: true
-    const secure = sameSite === 'None' ? true : (c.secure ?? false);
+    const ssLower = rawSS.toLowerCase();
+    if (ssLower === 'strict') sameSite = 'Strict';
+    else if (ssLower === 'none' || ssLower === 'no_restriction') sameSite = 'None';
+    else sameSite = 'Lax';
 
     return {
       name: c.name,
       value: c.value,
-      domain,
+      domain: c.domain || '.vk.com',
       path: c.path || '/',
       expires: c.expires ?? c.expirationDate ?? -1,
       httpOnly: c.httpOnly ?? false,
-      secure,
+      secure: sameSite === 'None' ? true : (c.secure ?? false),
       sameSite,
     };
   });
+
+  return { cookies, origins: [] };
 }
 
 /**
@@ -226,6 +215,10 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
 
   console.log(`   🎭 Launching Playwright to get VK editor hash...`);
 
+  // Convert cookies to Playwright storageState format (same approach as Dzen)
+  const storageState = buildStorageState();
+  console.log(`   🍪 Prepared storageState with ${storageState.cookies.length} cookies`);
+
   const browser = await chromium.launch({
     headless: true,
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
@@ -235,12 +228,8 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
     const context = await browser.newContext({
       viewport: { width: 1280, height: 900 },
       userAgent: USER_AGENT,
+      storageState,
     });
-
-    // Load cookies into browser context
-    const playwrightCookies = loadVkCookiesForPlaywright();
-    console.log(`   🍪 Loading ${playwrightCookies.length} VK cookies into browser`);
-    await context.addCookies(playwrightCookies);
 
     const page = await context.newPage();
 
@@ -252,20 +241,20 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
       if (!url.includes('al_articles.php')) return;
 
       try {
-        const text = await response.text();
-        const json = JSON.parse(text);
+        const body = await response.text();
+        const json = JSON.parse(body);
         const payload = json?.payload;
 
         // We want a NON-code-3 response (code 0 = success)
         if (Array.isArray(payload) && payload.length >= 2) {
           const code = payload[0];
+          console.log(`   📡 al_articles.php response code: ${code}`);
           if (code !== '3' && code !== 3) {
             // Look for hash in the payload
             const data = payload[1];
             if (typeof data === 'object' && data !== null) {
-              // Recursively find hex hashes
-              const text = JSON.stringify(data);
-              const hashMatch = text.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"/);
+              const str = JSON.stringify(data);
+              const hashMatch = str.match(/"hash"\s*:\s*"([a-f0-9]{14,22})"/);
               if (hashMatch) {
                 capturedHash = hashMatch[1];
                 console.log(`   🔑 Captured hash from network: ${capturedHash}`);
@@ -278,9 +267,8 @@ async function fetchEditorHash(cookieHeader: string): Promise<{ hash: string; co
       }
     });
 
-    // Navigate: first go to vk.com to establish session, then open the editor overlay
-    // Going directly to the z=article_edit URL can cause redirect loops
-    console.log(`   📄 Navigating to vk.com to establish session...`);
+    // Navigate to vk.com first to establish the session
+    console.log(`   📄 Navigating to vk.com/feed...`);
     await page.goto('https://vk.com/feed', {
       waitUntil: 'domcontentloaded',
       timeout: 30_000,
