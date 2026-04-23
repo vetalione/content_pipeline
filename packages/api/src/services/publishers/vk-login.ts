@@ -352,6 +352,21 @@ async function detectLoginState(page: Page): Promise<{
     }
   }
 
+  // Post-scan confirmation: after the user scans the QR, VK ID redirects to
+  // id.vk.com/auth?...qr_auth_scanned... and waits for the user to tap
+  // "Подтвердить" on their phone. The page shows no QR, no form — just a
+  // spinner. Keep polling until remixsid cookie is set or URL changes again.
+  if (
+    url.includes('id.vk.com/auth') &&
+    (url.includes('qr_auth_scanned') || url.includes('qr_auth'))
+  ) {
+    console.log(`   ⏳ QR scanned — waiting for confirmation in VK app`);
+    return {
+      status: 'awaiting_qr',
+      message: 'QR отсканирован. Подтвердите вход в приложении VK на телефоне.',
+    };
+  }
+
   // Universal QR check — works on any URL (id.vk.com/auth, vk.com/, etc.)
   // First, localized text anchor (strongest signal, no false positives).
   const qrTextVisible = await page
@@ -538,6 +553,20 @@ async function waitForMeaningfulState(
       .catch(() => false);
     if (hasLoginForm) {
       return { status: 'awaiting_password', hasLoginForm: true };
+    }
+
+    // Post-scan confirmation screen — URL changed to id.vk.com/auth?...qr_auth_scanned.
+    // Treat as "still waiting" so pollVkLogin keeps checking for remixsid.
+    const curUrl = page.url();
+    if (
+      curUrl.includes('id.vk.com/auth') &&
+      (curUrl.includes('qr_auth_scanned') || curUrl.includes('qr_auth'))
+    ) {
+      return {
+        status: 'awaiting_qr',
+        message: 'QR отсканирован. Подтвердите вход в приложении VK на телефоне.',
+        hasLoginForm: false,
+      };
     }
 
     // QR-like image or canvas? VK on id.vk.com renders the QR as an <img>
@@ -879,6 +908,14 @@ export async function pollVkLogin(sessionId: string): Promise<LoginStepResult> {
   }
 
   if (state.status === 'error') {
+    if (await tryRescueCookies(s.context)) {
+      await cleanupSession(sessionId);
+      return {
+        sessionId,
+        status: 'done',
+        message: 'Успешный вход (восстановлено по cookies).',
+      };
+    }
     const screenshot = await takeScreenshot(s.page);
     await cleanupSession(sessionId);
     return {
