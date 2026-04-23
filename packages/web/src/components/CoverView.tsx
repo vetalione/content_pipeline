@@ -41,6 +41,14 @@ export default function CoverView({ articleId, celebrityName, coverImages = [], 
   const [selectedColor, setSelectedColor] = useState('');
   const [customIcons, setCustomIcons] = useState('');
   const [customFact, setCustomFact] = useState('');
+  const [coverModel, setCoverModel] = useState<'gemini' | 'openai'>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('coverModel') : null;
+    return saved === 'openai' ? 'openai' : 'gemini';
+  });
+
+  useEffect(() => {
+    if (typeof window !== 'undefined') localStorage.setItem('coverModel', coverModel);
+  }, [coverModel]);
 
   // Load preview options when showing advanced
   useEffect(() => {
@@ -72,7 +80,7 @@ export default function CoverView({ articleId, celebrityName, coverImages = [], 
   const generateCover = async (useCustom: boolean = false) => {
     setLoading(true);
     try {
-      const payload: any = { template: 'default' };
+      const payload: any = { template: 'default', model: coverModel };
       
       if (useCustom) {
         payload.heroName = customHeroName;
@@ -159,6 +167,35 @@ export default function CoverView({ articleId, celebrityName, coverImages = [], 
           <Sparkles size={18} className={loading ? 'animate-pulse' : ''} />
           {loading ? 'Генерирую...' : coverImages.length > 0 ? 'Новая версия' : 'Сгенерировать'}
         </button>
+      </div>
+
+      {/* Model selector */}
+      <div className="mb-4 flex items-center gap-3 text-sm">
+        <span className="text-gray-600">Модель генерации:</span>
+        <div className="inline-flex rounded-lg border border-gray-300 overflow-hidden">
+          <button
+            type="button"
+            onClick={() => setCoverModel('gemini')}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+              coverModel === 'gemini'
+                ? 'bg-blue-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            🍌 Nano Banana (Gemini)
+          </button>
+          <button
+            type="button"
+            onClick={() => setCoverModel('openai')}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors border-l border-gray-300 ${
+              coverModel === 'openai'
+                ? 'bg-emerald-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            🧠 ChatGPT Images (gpt-image-1)
+          </button>
+        </div>
       </div>
 
       {/* Existing Covers Grid */}

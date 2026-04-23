@@ -99,7 +99,7 @@ pipelineRouter.get('/:articleId/cover/preview', async (req, res, next) => {
 pipelineRouter.post('/:articleId/cover', async (req, res, next) => {
   try {
     const { articleId } = req.params;
-    const { template, heroName, title, colorScheme, icons, sharpFact } = req.body;
+    const { template, heroName, title, colorScheme, icons, sharpFact, model } = req.body;
     
     await coverQueue.add('cover', {
       articleId,
@@ -111,6 +111,7 @@ pipelineRouter.post('/:articleId/cover', async (req, res, next) => {
         colorScheme,
         icons,
         sharpFact,
+        model: model === 'openai' ? 'openai' : 'gemini',
       }
     });
     

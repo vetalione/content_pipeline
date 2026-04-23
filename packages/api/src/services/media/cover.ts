@@ -2,6 +2,9 @@ import path from 'path';
 import { prisma } from '../../lib/db';
 import { PipelineStage } from '@content-pipeline/shared';
 import { generateCoverImage, getCoverPreviewOptions, getAllColorCombinations, CoverGenerationOptions } from './gemini-cover';
+import { generateCoverImageOpenAI } from './openai-cover';
+
+export type CoverModel = 'gemini' | 'openai';
 
 export interface CoverOptions {
   heroName?: string;
@@ -9,6 +12,7 @@ export interface CoverOptions {
   colorScheme?: string;
   icons?: string[];
   sharpFact?: string;
+  model?: CoverModel;
 }
 
 /**
@@ -62,8 +66,12 @@ export async function generateCover(articleId: string, template: string, options
     articleContent: content,
   };
 
-  // Generate cover with Gemini Imagen
-  const result = await generateCoverImage(generationOptions);
+  // Generate cover with the selected model (default: Gemini Nano Banana)
+  const model: CoverModel = options?.model === 'openai' ? 'openai' : 'gemini';
+  console.log(`🧠 Cover model: ${model}`);
+  const result = model === 'openai'
+    ? await generateCoverImageOpenAI(generationOptions)
+    : await generateCoverImage(generationOptions);
 
   if (!result.success) {
     console.error('❌ Cover generation failed:', result.error);
@@ -91,7 +99,7 @@ export async function generateCover(articleId: string, template: string, options
       articleId,
       originalImageUrl: imageUrl,
       localPath: result.imagePath || `/covers/${articleId}_v${nextVersion}.jpg`,
-      template,
+      template: `${template}:${model}`,
       version: nextVersion,
       isSelected: false // User will manually select the best one
     }
