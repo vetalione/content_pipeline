@@ -353,12 +353,14 @@ async function detectLoginState(page: Page): Promise<{
   }
 
   // Post-scan confirmation: after the user scans the QR, VK ID redirects to
-  // id.vk.com/auth?...qr_auth_scanned... and waits for the user to tap
-  // "Подтвердить" on their phone. The page shows no QR, no form — just a
-  // spinner. Keep polling until remixsid cookie is set or URL changes again.
+  // id.vk.com/auth?...response_type=silent_token&sdk_type=vkid&... and waits
+  // for the user to tap "Подтвердить" on their phone. The page shows no QR, no form —
+  // just a spinner. Keep polling until remixsid cookie is set. Note: the
+  // `action` param is base64-encoded JSON, so we can't look for "qr_auth"
+  // as a plain substring — use the stable SDK query params instead.
   if (
     url.includes('id.vk.com/auth') &&
-    (url.includes('qr_auth_scanned') || url.includes('qr_auth'))
+    (url.includes('response_type=silent_token') || url.includes('sdk_type=vkid'))
   ) {
     console.log(`   ⏳ QR scanned — waiting for confirmation in VK app`);
     return {
@@ -555,12 +557,14 @@ async function waitForMeaningfulState(
       return { status: 'awaiting_password', hasLoginForm: true };
     }
 
-    // Post-scan confirmation screen — URL changed to id.vk.com/auth?...qr_auth_scanned.
+    // Post-scan confirmation screen — URL changed to
+    // id.vk.com/auth?response_type=silent_token&sdk_type=vkid&...
     // Treat as "still waiting" so pollVkLogin keeps checking for remixsid.
     const curUrl = page.url();
     if (
       curUrl.includes('id.vk.com/auth') &&
-      (curUrl.includes('qr_auth_scanned') || curUrl.includes('qr_auth'))
+      (curUrl.includes('response_type=silent_token') ||
+        curUrl.includes('sdk_type=vkid'))
     ) {
       return {
         status: 'awaiting_qr',
