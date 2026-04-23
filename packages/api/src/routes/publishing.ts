@@ -461,6 +461,51 @@ publishingRouter.get('/auth/vk/login/sessions', async (_req, res) => {
   res.json({ success: true, data: { active: listActiveSessions() } });
 });
 
+// List VK login screenshots (saved on errors/unknown states for debugging)
+publishingRouter.get('/auth/vk/login/screenshots', async (_req, res) => {
+  const fs = await import('fs');
+  const path = await import('path');
+  const dir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'vk-login-screenshots')
+    : '/tmp/vk-login-screenshots';
+  try {
+    if (!fs.existsSync(dir)) {
+      return res.json({ success: true, screenshots: [], directory: dir });
+    }
+    const files = fs
+      .readdirSync(dir)
+      .filter((f: string) => f.endsWith('.png'))
+      .map((f: string) => {
+        const stat = fs.statSync(path.join(dir, f));
+        return { name: f, size: stat.size, mtime: stat.mtime.toISOString() };
+      })
+      .sort((a, b) => (a.mtime < b.mtime ? 1 : -1))
+      .slice(0, 30);
+    res.json({ success: true, screenshots: files, directory: dir });
+  } catch (error: any) {
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
+// Serve a specific VK login screenshot
+publishingRouter.get('/auth/vk/login/screenshots/:filename', async (req, res) => {
+  const fs = await import('fs');
+  const path = await import('path');
+  const dir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'vk-login-screenshots')
+    : '/tmp/vk-login-screenshots';
+  const filename = req.params.filename;
+  if (filename.includes('..') || filename.includes('/')) {
+    return res.status(400).json({ error: 'Invalid filename' });
+  }
+  const filepath = path.join(dir, filename);
+  if (!fs.existsSync(filepath)) {
+    return res.status(404).json({ error: 'Screenshot not found' });
+  }
+  res.setHeader('Content-Type', 'image/png');
+  res.sendFile(filepath);
+});
+
 
 
 // Get list of screenshots
