@@ -193,7 +193,7 @@ export default function CoverView({ articleId, celebrityName, coverImages = [], 
                 : 'bg-white text-gray-700 hover:bg-gray-50'
             }`}
           >
-            🧠 ChatGPT Images (gpt-image-1)
+            🧠 ChatGPT Images (gpt-image-2)
           </button>
         </div>
       </div>

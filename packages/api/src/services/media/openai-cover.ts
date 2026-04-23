@@ -16,7 +16,7 @@ export async function generateCoverImageOpenAI(options: CoverGenerationOptions):
   const { prompt, sharpFact } = buildCoverPrompt(options);
 
   console.log(`🎨 [OpenAI] Cover sharp fact: "${sharpFact}"`);
-  console.log('🎨 Generating cover with gpt-image-1...');
+  console.log('🎨 Generating cover with gpt-image-2...');
   console.log('📝 Prompt (first 300 chars):', prompt.substring(0, 300));
 
   const apiKey = process.env.OPENAI_API_KEY;
@@ -41,9 +41,9 @@ export async function generateCoverImageOpenAI(options: CoverGenerationOptions):
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
-          model: 'gpt-image-1',
+          model: 'gpt-image-2',
           prompt,
-          // Closest landscape to 16:9 supported by gpt-image-1
+          // Closest landscape to 16:9 supported by gpt-image-2
           size: '1536x1024',
           quality: 'high',
           n: 1,
