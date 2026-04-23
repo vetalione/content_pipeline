@@ -277,7 +277,7 @@ articlesRouter.post('/:id/facts/:factId/regenerate-image', async (req, res, next
 articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
   try {
     const { id: articleId, factId } = req.params;
-    const { useGoogle = true, useBrave = true, usePerplexity = true, confidenceThreshold = 85, resultsPerSource = 5 } = req.body || {};
+    const { useGoogle = true, useBrave = true, usePerplexity = true, useOpenAI = false, confidenceThreshold = 85, resultsPerSource = 5 } = req.body || {};
     
     // Get article with research data
     const article = await prisma.article.findUnique({
@@ -350,6 +350,7 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
         useGoogle,
         useBrave,
         usePerplexity,
+        useOpenAI,
         confidenceThreshold,
         resultsPerSource,
         excludeLocalPaths: usedPaths,
@@ -425,7 +426,7 @@ articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, n
   try {
     const { id: articleId, sectionIndex } = req.params;
     const sectionIdx = parseInt(sectionIndex, 10);
-    const { useGoogle = true, useBrave = true, usePerplexity = true, confidenceThreshold = 70, resultsPerSource = 5 } = req.body || {};
+    const { useGoogle = true, useBrave = true, usePerplexity = true, useOpenAI = false, confidenceThreshold = 70, resultsPerSource = 5 } = req.body || {};
     
     // Get article with content and research data
     const article = await prisma.article.findUnique({
@@ -522,7 +523,7 @@ articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, n
             : 'Поиск...'
         });
       },
-      { useGoogle, useBrave, usePerplexity, confidenceThreshold, resultsPerSource, excludeLocalPaths: usedPaths }
+      { useGoogle, useBrave, usePerplexity, useOpenAI, confidenceThreshold, resultsPerSource, excludeLocalPaths: usedPaths }
     );
     
     if (!imageUrl) {

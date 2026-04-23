@@ -30,7 +30,7 @@ export default function ContentView({ content, researchData, articleId, onUpdate
   const [searchConfig, setSearchConfig] = useState<ImageSearchConfig>(() => {
     const saved = localStorage.getItem('imageSearchConfig');
     return saved ? JSON.parse(saved) : {
-      sources: { google: true, brave: true, perplexity: true },
+      sources: { google: true, brave: true, perplexity: true, openai: false },
       confidenceThreshold: 70,
       resultsPerSource: 5
     };
@@ -80,6 +80,7 @@ export default function ContentView({ content, researchData, articleId, onUpdate
           useGoogle: searchConfig.sources.google,
           useBrave: searchConfig.sources.brave,
           usePerplexity: searchConfig.sources.perplexity,
+          useOpenAI: searchConfig.sources.openai,
           confidenceThreshold: searchConfig.confidenceThreshold,
           resultsPerSource: searchConfig.resultsPerSource
         })

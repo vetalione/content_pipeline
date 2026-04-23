@@ -6,6 +6,7 @@ export interface ImageSearchConfig {
     google: boolean;
     brave: boolean;
     perplexity: boolean;
+    openai: boolean;
   };
   confidenceThreshold: 75 | 85 | 95 | 99;
   resultsPerSource: 3 | 5 | 10 | 15;
@@ -24,6 +25,7 @@ export default function ImageSearchSettings({ config, onChange }: Props) {
     google: config.sources?.google ?? true,
     brave: config.sources?.brave ?? true,
     perplexity: config.sources?.perplexity ?? true,
+    openai: config.sources?.openai ?? false,
   };
 
   return (
@@ -100,8 +102,24 @@ export default function ImageSearchSettings({ config, onChange }: Props) {
                   <span className="text-gray-400 text-xs ml-1">(AI-подбор)</span>
                 </span>
               </label>
+
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={sources.openai}
+                  onChange={(e) => onChange({
+                    ...config,
+                    sources: { ...sources, openai: e.target.checked }
+                  })}
+                  className="w-4 h-4 rounded border-gray-300 text-emerald-600 focus:ring-emerald-500"
+                />
+                <span className="text-sm text-gray-700">
+                  🧠 ChatGPT (GPT-5 web_search)
+                  <span className="text-gray-400 text-xs ml-1">(дороже, медленнее)</span>
+                </span>
+              </label>
             </div>
-            {!sources.google && !sources.brave && !sources.perplexity && (
+            {!sources.google && !sources.brave && !sources.perplexity && !sources.openai && (
               <p className="text-xs text-red-500 mt-1">⚠️ Выберите хотя бы один поисковик</p>
             )}
           </div>
@@ -165,13 +183,15 @@ export default function ImageSearchSettings({ config, onChange }: Props) {
                 if (sources.google) total += config.resultsPerSource * 2; // EN + RU
                 if (sources.brave) total += config.resultsPerSource;
                 if (sources.perplexity) total += config.resultsPerSource;
+                if (sources.openai) total += config.resultsPerSource;
                 return total;
               })()} 
               {' '}• Порог: {config.confidenceThreshold}%
               {' '}• Поисковики: {[
                 sources.google && 'Google',
                 sources.brave && 'Brave', 
-                sources.perplexity && 'Perplexity'
+                sources.perplexity && 'Perplexity',
+                sources.openai && 'ChatGPT'
               ].filter(Boolean).join(', ') || 'Нет'}
             </p>
           </div>

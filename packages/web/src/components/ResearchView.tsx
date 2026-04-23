@@ -55,7 +55,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
       }
     }
     return {
-      sources: { google: true, brave: true, perplexity: true },
+      sources: { google: true, brave: true, perplexity: true, openai: false },
       confidenceThreshold: 85,
       resultsPerSource: 5
     };
@@ -241,6 +241,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
           useGoogle: searchConfig.sources.google,
           useBrave: searchConfig.sources.brave,
           usePerplexity: searchConfig.sources.perplexity,
+          useOpenAI: searchConfig.sources.openai,
           confidenceThreshold: searchConfig.confidenceThreshold,
           resultsPerSource: searchConfig.resultsPerSource
         })

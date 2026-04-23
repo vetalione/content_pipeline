@@ -57,6 +57,7 @@ import { promises as fs } from 'fs';
 import { batchValidateImages } from './gemini-image-validator';
 import { searchBraveImages } from './brave-images';
 import { searchPerplexityImages } from './perplexity-images';
+import { searchOpenAIImages } from './openai-images';
 import { getWikipediaImages, searchWikimediaCommons } from './wikipedia-images';
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -80,7 +81,7 @@ export interface ImageCandidate {
   thumbnailUrl?: string;   // Small preview (Google encryptedTBN / Brave CDN / Wikimedia resize)
   title?: string;          // Page/image title — used for metadata scoring
   sourceUrl?: string;      // Page where the image appears (contextLink)
-  source: 'google-en' | 'google-ru' | 'brave' | 'perplexity' | 'wikipedia';
+  source: 'google-en' | 'google-ru' | 'brave' | 'perplexity' | 'wikipedia' | 'openai';
   metadataScore: number;   // 0–10, computed without any HTTP request
 }
 
@@ -623,6 +624,7 @@ export interface ImageSearchOptions {
   useGoogle?: boolean;
   useBrave?: boolean;
   usePerplexity?: boolean;
+  useOpenAI?: boolean;
   confidenceThreshold?: number;
   resultsPerSource?: number;
   excludeUrls?: string[];  // Web URLs to exclude (already used as source)
@@ -714,6 +716,7 @@ export async function findFactImage(
     useGoogle = true,
     useBrave = true,
     usePerplexity = true,
+    useOpenAI = false,
     confidenceThreshold = 75,
     resultsPerSource = 3,
     excludeUrls = [],
@@ -806,6 +809,13 @@ export async function findFactImage(
     // the research prompt to describe a specific rare archival moment.
     const searchDesc = visualSuggestion ?? `${englishName} ${factTitle}`;
     searches.push(searchPerplexityImages(searchDesc, resultsPerSource, celebrityName, factYear));
+  }
+  if (useOpenAI) {
+    // GPT-5 with the built-in web_search tool — asks the model to browse the
+    // web and return a JSON list of direct image URLs. Same role as Perplexity
+    // (AI-driven, context-aware search), but a completely different index/crawl.
+    const searchDesc = visualSuggestion ?? `${englishName} ${factTitle}`;
+    searches.push(searchOpenAIImages(searchDesc, resultsPerSource, celebrityName, factYear));
   }
 
   // Wikimedia Commons: free archival search (no API key needed).
