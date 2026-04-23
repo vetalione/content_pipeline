@@ -52,6 +52,7 @@
  */
 
 import path from 'path';
+import crypto from 'crypto';
 import { promises as fs } from 'fs';
 import { batchValidateImages } from './gemini-image-validator';
 import { searchBraveImages } from './brave-images';
@@ -624,7 +625,17 @@ export interface ImageSearchOptions {
   usePerplexity?: boolean;
   confidenceThreshold?: number;
   resultsPerSource?: number;
-  excludeUrls?: string[];  // URLs to exclude (already used images)
+  excludeUrls?: string[];  // Web URLs to exclude (already used as source)
+  /**
+   * Local `/images/...` paths (what is stored in article.content.sections[].imageUrl
+   * and article.researchData.facts[].imageUrl) to exclude. When the pipeline
+   * finishes downloading a candidate, if its cached local path matches any of
+   * these, the next-best candidate is downloaded instead. Combined with
+   * content-hash-based caching in `downloadAndCacheImage`, this reliably
+   * prevents the same image from being assigned to multiple facts/sections
+   * even when two different search engines surface it via different URLs.
+   */
+  excludeLocalPaths?: string[];
   /**
    * Set to true for article COVER / header image — uses Wikipedia Tier 0
    * (returns the most recognizable mainstream headshot, perfect for audience recognition).
@@ -706,9 +717,11 @@ export async function findFactImage(
     confidenceThreshold = 75,
     resultsPerSource = 3,
     excludeUrls = [],
+    excludeLocalPaths = [],
   } = options ?? {};
 
   const excludedUrlSet = new Set(excludeUrls.map(u => u.toLowerCase()));
+  const excludedLocalSet = new Set(excludeLocalPaths.map(u => u.toLowerCase()));
   const englishName = translateCelebrityName(celebrityName);
   const nameIsEnglish = isEnglishName(celebrityName);
 
@@ -833,8 +846,11 @@ export async function findFactImage(
   if (unique.length === 0) return null;
 
   // ── Metadata fast-track: skip Gemini for very high-scoring candidates ─────
-  // score=10 means Wikipedia canonical → trust it.
-  const topByMeta = unique.find(c => c.metadataScore >= 10);
+  // score=10 means Wikipedia canonical → trust it. (Skip if already used.)
+  const topByMeta = unique.find(c =>
+    c.metadataScore >= 10 &&
+    !excludedUrlSet.has(c.originalUrl.toLowerCase())
+  );
   if (topByMeta) {
     console.log(`  ✅ Metadata fast-track (score=10): ${topByMeta.originalUrl.substring(0, 80)}`);
     if (onProgress) onProgress({ stage: 'found', current: 1, total: 1, confidence: 95 });
@@ -854,40 +870,77 @@ export async function findFactImage(
 
   console.log(`  🔍 TIER 2: batch Gemini validation (${toValidate.length} candidates, 4/request)...`);
 
-  let bestCandidate: ImageCandidate | null = null;
-  let bestConfidence = 0;
+  // Collect per-image confidence across all batches so we can rank and iterate
+  // (essential for dedup: if the top pick turns out to be already used, we
+  // fall through to the next-best candidate instead of giving up).
+  type Scored = { c: ImageCandidate; conf: number };
+  const scored: Scored[] = [];
+  let bestConf = 0;
+  let earlyExit = false;
 
-  // Process in batches of BATCH_SIZE
-  for (let i = 0; i < toValidate.length; i += 4) {
+  for (let i = 0; i < toValidate.length && !earlyExit; i += 4) {
     const batch = toValidate.slice(i, i + 4);
     const batchResult = await batchValidateImages(batch, celebrityName, description, factYear);
+    if (!batchResult) continue;
 
-    if (batchResult) {
-      if (onProgress) {
-        onProgress({ stage: 'validating', current: Math.min(i + 4, toValidate.length), total: toValidate.length, confidence: batchResult.confidence });
-      }
-      if (batchResult.confidence > bestConfidence) {
-        bestConfidence = batchResult.confidence;
-        bestCandidate = batch[batchResult.bestIndex];
-      }
-      // Early exit if we found a great match
-      if (batchResult.confidence >= confidenceThreshold) {
-        console.log(`  🎯 Early exit: ${batchResult.confidence}% ≥ threshold ${confidenceThreshold}%`);
-        break;
-      }
+    if (onProgress) {
+      onProgress({
+        stage: 'validating',
+        current: Math.min(i + 4, toValidate.length),
+        total: toValidate.length,
+        confidence: batchResult.confidence,
+      });
+    }
+
+    // Use per-image scores when available (current gemini-image-validator does return them)
+    if (Array.isArray(batchResult.scores) && batchResult.scores.length === batch.length) {
+      batch.forEach((c, idx) => scored.push({ c, conf: batchResult.scores[idx] ?? 0 }));
+    } else {
+      scored.push({ c: batch[batchResult.bestIndex], conf: batchResult.confidence });
+    }
+
+    if (batchResult.confidence > bestConf) bestConf = batchResult.confidence;
+
+    if (batchResult.confidence >= confidenceThreshold) {
+      console.log(`  🎯 Early exit: ${batchResult.confidence}% ≥ threshold ${confidenceThreshold}%`);
+      earlyExit = true;
     }
   }
 
-  if (bestCandidate) {
-    console.log(`  ✅ Best match: ${bestConfidence}% — ${bestCandidate.originalUrl.substring(0, 80)}`);
-    if (onProgress) onProgress({ stage: 'found', current: toValidate.length, total: toValidate.length, confidence: bestConfidence });
-    return downloadAndCacheImage(bestCandidate.originalUrl, bestCandidate.thumbnailUrl);
+  // Rank by Gemini confidence (desc), tiebreak by metadata score (desc)
+  scored.sort((a, b) => (b.conf - a.conf) || (b.c.metadataScore - a.c.metadataScore));
+
+  // Walk best → worst. Download each and skip if it's already used in this article
+  // (either the web URL matches or — critically — the content-hashed local path matches).
+  for (const { c, conf } of scored) {
+    if (excludedUrlSet.has(c.originalUrl.toLowerCase())) {
+      console.log(`  ⏭️  URL already used (dup): ${c.originalUrl.substring(0, 70)}`);
+      continue;
+    }
+    const localPath = await downloadAndCacheImage(c.originalUrl, c.thumbnailUrl);
+    if (!localPath) continue;
+    if (excludedLocalSet.has(localPath.toLowerCase()) || excludedUrlSet.has(localPath.toLowerCase())) {
+      console.log(`  ⏭️  Downloaded image already used (dup, conf=${conf}%): ${localPath}`);
+      continue;
+    }
+    console.log(`  ✅ Selected (conf=${conf}%): ${localPath}`);
+    if (onProgress) onProgress({ stage: 'found', current: toValidate.length, total: toValidate.length, confidence: conf });
+    return localPath;
   }
 
-  // Last resort: return highest metadata-scored candidate without validation
-  console.log(`  ⚠️ Validation failed, using best metadata candidate`);
-  const fallback = sorted[0];
-  return fallback ? downloadAndCacheImage(fallback.originalUrl, fallback.thumbnailUrl) : null;
+  // All validated candidates are duplicates — try metadata-ordered fallback
+  console.log(`  ⚠️ All validated candidates are duplicates; trying metadata-ordered fallback...`);
+  for (const c of sorted) {
+    if (excludedUrlSet.has(c.originalUrl.toLowerCase())) continue;
+    const localPath = await downloadAndCacheImage(c.originalUrl, c.thumbnailUrl);
+    if (!localPath) continue;
+    if (excludedLocalSet.has(localPath.toLowerCase())) continue;
+    console.log(`  ✅ Fallback pick (metadata=${c.metadataScore}): ${localPath}`);
+    return localPath;
+  }
+
+  console.log(`  ❌ No unique image candidates left — giving up`);
+  return null;
 }
 
 /**
@@ -982,14 +1035,28 @@ async function downloadAndCacheImage(
         continue;
       }
 
+      // Content-hash filename: two different source URLs that return the same
+      // image bytes (very common — same photo on Wikimedia + Getty + fan sites)
+      // will produce the same file name and therefore the same local path.
+      // This is what makes excludeLocalPaths dedup reliable across search engines.
+      const sha = crypto.createHash('sha256').update(bytes).digest('hex').slice(0, 16);
       const ext = contentType.includes('png') ? 'png' : 'jpg';
-      const fileName = `img_${Date.now()}_${Math.random().toString(36).slice(2, 7)}.${ext}`;
+      const fileName = `img_${sha}.${ext}`;
       const storageBase = process.env.STORAGE_PATH || process.cwd();
       const imagesDir = path.join(storageBase, 'images');
       await fs.mkdir(imagesDir, { recursive: true });
-      await fs.writeFile(path.join(imagesDir, fileName), bytes);
-
+      const fullPath = path.join(imagesDir, fileName);
       const localPath = `/images/${fileName}`;
+
+      try {
+        await fs.access(fullPath);
+        console.log(`  ♻️  Cache hit (${(bytes.length / 1024).toFixed(0)} KB): ${localPath}`);
+        return localPath;
+      } catch {
+        // Not yet cached — write it
+      }
+      await fs.writeFile(fullPath, bytes);
+
       const sourceTag = url === resolvedOriginal ? 'original' : 'thumbnail-fallback';
       console.log(`  💾 Cached image (${sourceTag}, ${(bytes.length / 1024).toFixed(0)} KB): ${localPath}`);
       return localPath;

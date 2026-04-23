@@ -202,6 +202,18 @@ articlesRouter.post('/:id/facts/:factId/regenerate-image', async (req, res, next
     
     const fact = researchData.facts[factIndex];
     const currentImageUrl = fact.imageUrl;
+
+    // Collect ALL image URLs already in use across this article so we never
+    // return the same photo that is displayed elsewhere.
+    const usedUrls = new Set<string>();
+    for (const f of researchData.facts || []) {
+      if (f.imageUrl) usedUrls.add(String(f.imageUrl).toLowerCase());
+    }
+    const articleContent = article.content as any;
+    for (const s of articleContent?.sections || []) {
+      if (s.imageUrl) usedUrls.add(String(s.imageUrl).toLowerCase());
+    }
+    if (currentImageUrl) usedUrls.add(String(currentImageUrl).toLowerCase());
     
     // Build search query
     const queryParts = [article.celebrityName, 'photo'];
@@ -217,8 +229,8 @@ articlesRouter.post('/:id/facts/:factId/regenerate-image', async (req, res, next
     const query = queryParts.join(' ');
     console.log(`🔄 Regenerating image for fact "${fact.title}": ${query}`);
     
-    // Get up to 5 alternative image candidates (returns ImageCandidate[] with thumbnails)
-    const imageCandidates = await searchGoogleImages(query, 5, article.celebrityName);
+    // Get up to 10 alternative image candidates (returns ImageCandidate[] with thumbnails)
+    const imageCandidates = await searchGoogleImages(query, 10, article.celebrityName);
     const imageResults = imageCandidates.map(c => c.originalUrl);
     
     if (imageResults.length === 0) {
@@ -228,8 +240,10 @@ articlesRouter.post('/:id/facts/:factId/regenerate-image', async (req, res, next
       });
     }
     
-    // Find first image that's different from current one
-    const newImageUrl = imageResults.find(url => url !== currentImageUrl) || imageResults[0];
+    // Find first image that's different from ALL currently-used URLs in this article
+    const newImageUrl = imageResults.find(url => !usedUrls.has(url.toLowerCase()))
+      || imageResults.find(url => url !== currentImageUrl)
+      || imageResults[0];
     
     // Update fact with new image
     researchData.facts[factIndex].imageUrl = newImageUrl;
@@ -283,6 +297,19 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
     
     const fact = researchData.facts[factIndex];
     
+    // Collect every image URL currently used in this article so we don't
+    // return one that's already displayed somewhere else (or the one the
+    // user just said they don't want).
+    const usedPaths: string[] = [];
+    for (const f of researchData.facts || []) {
+      if (f.id !== factId && f.imageUrl) usedPaths.push(String(f.imageUrl));
+    }
+    const articleContent = article.content as any;
+    for (const s of articleContent?.sections || []) {
+      if (s.imageUrl) usedPaths.push(String(s.imageUrl));
+    }
+    if (fact.imageUrl) usedPaths.push(String(fact.imageUrl));
+
     // Emit progress: starting
     const io = getIO();
     io.emit('image-search-progress', {
@@ -324,7 +351,8 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
         useBrave,
         usePerplexity,
         confidenceThreshold,
-        resultsPerSource
+        resultsPerSource,
+        excludeLocalPaths: usedPaths,
       }
     );
     
@@ -440,6 +468,21 @@ articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, n
     const visualSuggestion = matchingFact?.visualSuggestion || `${article.celebrityName} - ${sectionTitle}`;
     const year = matchingFact?.year || section.year || '';
     
+    // Collect every image URL already used in this article so findFactImage
+    // can skip any candidate that resolves to the same cached file.
+    const usedPaths: string[] = [];
+    for (let i = 0; i < sections.length; i++) {
+      if (i !== sectionIdx && sections[i]?.imageUrl) {
+        usedPaths.push(String(sections[i].imageUrl));
+      }
+    }
+    for (const f of researchData?.facts || []) {
+      if (f?.imageUrl) usedPaths.push(String(f.imageUrl));
+    }
+    // Also exclude the section's current image so "re-pick" actually gives
+    // the user something different.
+    if (section.imageUrl) usedPaths.push(String(section.imageUrl));
+    
     // Emit progress: starting
     const io = getIO();
     io.emit('section-image-search-progress', {
@@ -479,7 +522,7 @@ articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, n
             : 'Поиск...'
         });
       },
-      { useGoogle, useBrave, usePerplexity, confidenceThreshold, resultsPerSource }
+      { useGoogle, useBrave, usePerplexity, confidenceThreshold, resultsPerSource, excludeLocalPaths: usedPaths }
     );
     
     if (!imageUrl) {

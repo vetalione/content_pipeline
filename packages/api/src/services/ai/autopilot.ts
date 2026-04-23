@@ -126,7 +126,10 @@ export async function runAutopilot(
             { 
               confidenceThreshold: 65, 
               resultsPerSource: 5,
-              excludeUrls: usedImageUrls  // Don't reuse same images
+              // Pass already-assigned local paths so findFactImage skips
+              // candidates that would resolve to the same cached file
+              // (works reliably thanks to content-hashed filenames).
+              excludeLocalPaths: usedImageUrls,
             }
           );
           
