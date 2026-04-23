@@ -897,6 +897,42 @@ export async function pollVkLogin(sessionId: string): Promise<LoginStepResult> {
     await passAntiBotChallenge(s.page, sessionId);
   }
 
+  // Post-confirmation kick: once the page lands on
+  //   id.vk.com/auth?response_type=silent_token&sdk_type=vkid&...
+  // it waits for the user to tap "Подтвердить" in the VK app, after which
+  // VK ID fires window.opener.postMessage(silent_token). We opened the QR
+  // directly (no opener window), so the token is lost and the page hangs.
+  //
+  // The reliable workaround: once the user has confirmed on their phone,
+  // VK's server-side id.vk.com session is marked as authenticated, so if
+  // we navigate to vk.com/ ourselves the SSO handshake completes and
+  // remixsid is set on the vk.com domain. We try this on every poll when
+  // stuck on the silent_token URL — harmless if the user hasn't confirmed
+  // yet (we'll just land on the login page and keep polling).
+  if (
+    curUrl.includes('id.vk.com/auth') &&
+    (curUrl.includes('response_type=silent_token') ||
+      curUrl.includes('sdk_type=vkid'))
+  ) {
+    // Look for a confirmation button that VK sometimes shows on this page
+    // ("Продолжить", "Войти", "Готово") — click it first if visible.
+    const actionBtn = s.page.locator(
+      'button:has-text("Продолжить"), button:has-text("Войти"), button:has-text("Готово"), button:has-text("Подтвердить")',
+    );
+    const hasBtn = await actionBtn.first().isVisible({ timeout: 500 }).catch(() => false);
+    if (hasBtn) {
+      console.log(`   👉 Clicking confirmation button on silent_token page`);
+      await actionBtn.first().click().catch(() => {});
+      await sleep(1500);
+    } else {
+      console.log(`   🏁 Stuck on silent_token page — navigating to vk.com/ to complete SSO`);
+      await s.page
+        .goto('https://vk.com/', { waitUntil: 'domcontentloaded', timeout: 15_000 })
+        .catch((err) => console.log(`      ↳ nav failed: ${err?.message ?? err}`));
+      await sleep(2000);
+    }
+  }
+
   const state = await detectLoginState(s.page);
   s.status = state.status;
   s.message = state.message;
