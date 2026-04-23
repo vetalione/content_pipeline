@@ -433,6 +433,95 @@ async function detectLoginState(page: Page): Promise<{
   };
 }
 
+/**
+ * Poll the page until a meaningful state is reached, or timeout.
+ *
+ * "Meaningful" = one of:
+ *  - 'done'            user is logged in (remixsid cookie or feed URL)
+ *  - 'awaiting_qr'     large square canvas visible (QR code rendered)
+ *  - 'awaiting_password' | 'awaiting_sms' | 'awaiting_captcha' — input field visible
+ *
+ * VK often takes 2–6 seconds after navigation before the QR canvas or the
+ * login form finishes rendering. Calling detectLoginState() once at 1.5s is
+ * too early and returns `error` (unknown state). This helper polls every
+ * 500ms until something concrete appears.
+ */
+async function waitForMeaningfulState(
+  page: Page,
+  timeoutMs: number = 10_000,
+): Promise<{ status: LoginStatus; message?: string; hasLoginForm: boolean }> {
+  const start = Date.now();
+  let lastStatus: LoginStatus = 'error';
+  let lastMessage: string | undefined;
+
+  while (Date.now() - start < timeoutMs) {
+    // Done wins immediately.
+    try {
+      const cookies = await page.context().cookies();
+      if (cookies.some((c) => c.name === 'remixsid' || c.name === 'remixnsid')) {
+        return { status: 'done', hasLoginForm: false };
+      }
+    } catch { /* ignore */ }
+
+    // Any credential field visible? → proceed with login form.
+    const hasLoginForm = await page
+      .locator(
+        [
+          'input[type="password"]',
+          '#email',
+          'input[name="email"]',
+          'input[name="login"]',
+          'input[type="tel"]',
+          'input[type="email"]',
+        ].join(', '),
+      )
+      .first()
+      .isVisible({ timeout: 250 })
+      .catch(() => false);
+    if (hasLoginForm) {
+      return { status: 'awaiting_password', hasLoginForm: true };
+    }
+
+    // QR-like canvas? Same heuristic as detectLoginState.
+    const canvases = page.locator('canvas');
+    const canvasCount = await canvases.count().catch(() => 0);
+    for (let i = 0; i < Math.min(canvasCount, 5); i++) {
+      const box = await canvases
+        .nth(i)
+        .boundingBox()
+        .catch(() => null);
+      if (
+        box &&
+        box.width >= 100 &&
+        box.height >= 100 &&
+        Math.abs(box.width - box.height) < 20
+      ) {
+        return {
+          status: 'awaiting_qr',
+          message: 'Отсканируйте QR-код мобильным приложением VK',
+          hasLoginForm: false,
+        };
+      }
+    }
+
+    // Full detect pass — catches SMS/captcha/feed.
+    const state = await detectLoginState(page);
+    lastStatus = state.status;
+    lastMessage = state.message;
+    if (state.status !== 'error') {
+      return {
+        status: state.status,
+        message: state.message,
+        hasLoginForm: state.status === 'awaiting_password',
+      };
+    }
+
+    await sleep(500);
+  }
+
+  return { status: lastStatus, message: lastMessage, hasLoginForm: false };
+}
+
 /** Save cookies from Playwright context to vk-state.json (the format vk-articles.ts expects). */
 async function saveCookies(context: BrowserContext): Promise<{ path: string; count: number }> {
   // Ensure we have all vk.com cookies: visit vk.com/ to let the server issue
@@ -776,6 +865,67 @@ export async function startVkLogin(
     const currentUrl = page.url();
     console.log(`   📍 Landed on: ${currentUrl}`);
 
+    // VK often responds to a fresh server-IP visit to /login by redirecting
+    // to https://vk.com/ and showing a QR code instead of the credential
+    // form (to avoid the password step from an unseen IP). Before trying
+    // to fill credentials, wait up to 10s for either a login input or a
+    // QR canvas to appear, then branch on what we got.
+    const initial = await waitForMeaningfulState(page, 10_000);
+    console.log(`   🔎 Initial state after /login: ${initial.status}`);
+
+    if (initial.status === 'done') {
+      await saveCookies(context);
+      await cleanupSession(id);
+      return {
+        sessionId: id,
+        status: 'done',
+        message: 'Уже авторизован — cookies сохранены.',
+      };
+    }
+
+    // If VK showed QR instead of the form, switch to QR-login mode and
+    // return the QR image to the UI — user can scan and we'll pick the
+    // session up via pollVkLogin(sessionId).
+    if (initial.status === 'awaiting_qr') {
+      console.log(`   🟦 VK показал QR вместо формы — переключаемся в QR-режим`);
+      const qrImage = await grabQrImage(page);
+      const screenshot = await takeScreenshot(page);
+      const session: LoginSession = {
+        id,
+        browser,
+        context,
+        page,
+        status: 'awaiting_qr',
+        message: initial.message,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
+      sessions.set(id, session);
+      return {
+        sessionId: id,
+        status: 'awaiting_qr',
+        message: initial.message || 'VK требует вход по QR. Отсканируйте код в приложении.',
+        screenshot,
+        qrImage: qrImage || undefined,
+        currentUrl: page.url(),
+      };
+    }
+
+    if (!initial.hasLoginForm && initial.status === 'error') {
+      await savePageScreenshot(page, `vk-login_noform_${id}`);
+      const screenshot = await takeScreenshot(page);
+      await cleanupSession(id);
+      return {
+        sessionId: id,
+        status: 'error',
+        message:
+          initial.message ||
+          `VK не показал ни форму логина, ни QR в течение 10с. URL: ${page.url()}`,
+        screenshot,
+        currentUrl: page.url(),
+      };
+    }
+
     // Two possible entry points:
     // 1. vk.com/login — classic form with email + password
     // 2. id.vk.com — redirects here, usually phone-only with SMS
@@ -846,9 +996,11 @@ export async function startVkLogin(
       }
     }
 
-    // Detect state after submit
-    await sleep(1500);
-    const state = await detectLoginState(page);
+    // Detect state after submit — poll up to 10s because VK may need a
+    // moment to evaluate credentials, serve a captcha/SMS page, or show
+    // the QR again if the account has 2FA.
+    const stateWait = await waitForMeaningfulState(page, 10_000);
+    const state = { status: stateWait.status, message: stateWait.message };
     console.log(`   📊 State after submit: ${state.status} — ${state.message || ''}`);
 
     const session: LoginSession = {
