@@ -1,6 +1,14 @@
 import { Router } from 'express';
 import { publishToTelegram } from '../services/publishers/telegram';
 import { publishToVK } from '../services/publishers/vk';
+import {
+  startVkLogin,
+  submitVkLoginStep,
+  cancelVkLogin,
+  listActiveSessions,
+  startVkLoginQr,
+  pollVkLogin,
+} from '../services/publishers/vk-login';
 import { setupDzenAuth } from '../services/publishers/dzen';
 import { publishToDzenApi } from '../services/publishers/dzen-api';
 import publishWithPlaywright from '../services/publishers/playwright';
@@ -375,7 +383,85 @@ publishingRouter.get('/auth/vk/status', async (_req, res) => {
   });
 });
 
-// ============ DZEN SCREENSHOTS API ============
+// ============ VK PLAYWRIGHT LOGIN ============
+// Interactive VK login via Playwright running on the server.
+// Produces cookies bound to the server's IP (required to bypass VK's IP-binding
+// protection when calling internal article-editor endpoints).
+
+publishingRouter.post('/auth/vk/login/start', async (req, res, next) => {
+  try {
+    const { login, password } = req.body || {};
+    if (!login || !password) {
+      return res.status(400).json({
+        success: false,
+        error: 'login and password are required',
+      });
+    }
+    const result = await startVkLogin(String(login), String(password));
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+publishingRouter.post('/auth/vk/login/qr', async (_req, res, next) => {
+  try {
+    const result = await startVkLoginQr();
+    res.json({ success: true, data: result });
+  } catch (error) {
+    next(error);
+  }
+});
+
+publishingRouter.get('/auth/vk/login/poll/:sessionId', async (req, res, next) => {
+  try {
+    const result = await pollVkLogin(req.params.sessionId);
+    res.json({ success: true, data: result });
+  } catch (error: any) {
+    if (error?.message?.includes('not found')) {
+      return res.status(404).json({ success: false, error: error.message });
+    }
+    next(error);
+  }
+});
+
+publishingRouter.post('/auth/vk/login/submit', async (req, res, next) => {
+  try {
+    const { sessionId, value } = req.body || {};
+    if (!sessionId || value == null) {
+      return res.status(400).json({
+        success: false,
+        error: 'sessionId and value are required',
+      });
+    }
+    const result = await submitVkLoginStep(String(sessionId), String(value));
+    res.json({ success: true, data: result });
+  } catch (error: any) {
+    if (error?.message?.includes('not found')) {
+      return res.status(404).json({ success: false, error: error.message });
+    }
+    next(error);
+  }
+});
+
+publishingRouter.post('/auth/vk/login/cancel', async (req, res, next) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) {
+      return res.status(400).json({ success: false, error: 'sessionId is required' });
+    }
+    await cancelVkLogin(String(sessionId));
+    res.json({ success: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+publishingRouter.get('/auth/vk/login/sessions', async (_req, res) => {
+  res.json({ success: true, data: { active: listActiveSessions() } });
+});
+
+
 
 // Get list of screenshots
 publishingRouter.get('/dzen/screenshots', async (_req, res) => {

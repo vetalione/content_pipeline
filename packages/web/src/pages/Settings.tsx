@@ -49,6 +49,16 @@ export default function Settings() {
   const [expandedPlatform, setExpandedPlatform] = useState<string | null>(null);
   const [message, setMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
+  // VK Playwright login state
+  const [vkLoginEmail, setVkLoginEmail] = useState('');
+  const [vkLoginPassword, setVkLoginPassword] = useState('');
+  const [vkLoginSessionId, setVkLoginSessionId] = useState<string | null>(null);
+  const [vkLoginStatus, setVkLoginStatus] = useState<string | null>(null);
+  const [vkLoginStepMessage, setVkLoginStepMessage] = useState<string | null>(null);
+  const [vkLoginScreenshot, setVkLoginScreenshot] = useState<string | null>(null);
+  const [vkLoginQrImage, setVkLoginQrImage] = useState<string | null>(null);
+  const [vkLoginStepValue, setVkLoginStepValue] = useState('');
+
   useEffect(() => {
     console.log('Settings page mounted, checking auth status...');
     checkAuthStatus();
@@ -199,6 +209,152 @@ export default function Settings() {
     }
   };
 
+  // ===== VK Playwright Login =====
+
+  const applyVkLoginResult = (r: any) => {
+    setVkLoginSessionId(r.sessionId);
+    setVkLoginStatus(r.status);
+    setVkLoginStepMessage(r.message || null);
+    setVkLoginScreenshot(r.screenshot || null);
+    setVkLoginQrImage(r.qrImage || null);
+
+    if (r.status === 'done') {
+      setMessage({ type: 'success', text: 'Успешный вход в VK! Cookies сохранены.' });
+      setVkLoginEmail('');
+      setVkLoginPassword('');
+      setVkLoginSessionId(null);
+      setVkLoginStatus(null);
+      setVkLoginQrImage(null);
+      checkAuthStatus();
+    } else if (r.status === 'error') {
+      setMessage({ type: 'error', text: r.message || 'Ошибка входа' });
+      setVkLoginSessionId(null);
+    }
+  };
+
+  const handleStartVkLoginQr = async () => {
+    setSaving('vk-login-qr');
+    setMessage(null);
+    setVkLoginScreenshot(null);
+    setVkLoginQrImage(null);
+    try {
+      const response = await fetch(`${API_URL}/api/publishing/auth/vk/login/qr`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || 'Ошибка открытия QR');
+      applyVkLoginResult(data.data);
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message });
+      setVkLoginSessionId(null);
+      setVkLoginStatus(null);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleStartVkLogin = async () => {
+    if (!vkLoginEmail.trim() || !vkLoginPassword.trim()) {
+      setMessage({ type: 'error', text: 'Введите email/телефон и пароль' });
+      return;
+    }
+    setSaving('vk-login');
+    setMessage(null);
+    setVkLoginScreenshot(null);
+    setVkLoginQrImage(null);
+    try {
+      const response = await fetch(`${API_URL}/api/publishing/auth/vk/login/start`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          login: vkLoginEmail.trim(),
+          password: vkLoginPassword,
+        }),
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || 'Ошибка входа');
+      applyVkLoginResult(data.data);
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message });
+      setVkLoginSessionId(null);
+      setVkLoginStatus(null);
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleSubmitVkStep = async () => {
+    if (!vkLoginSessionId) return;
+    if (!vkLoginStepValue.trim()) {
+      setMessage({ type: 'error', text: 'Введите значение' });
+      return;
+    }
+    setSaving('vk-login-step');
+    setMessage(null);
+    try {
+      const response = await fetch(`${API_URL}/api/publishing/auth/vk/login/submit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: vkLoginSessionId,
+          value: vkLoginStepValue.trim(),
+        }),
+      });
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || 'Ошибка');
+      setVkLoginStepValue('');
+      applyVkLoginResult(data.data);
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
+  const handleCancelVkLogin = async () => {
+    if (!vkLoginSessionId) return;
+    try {
+      await fetch(`${API_URL}/api/publishing/auth/vk/login/cancel`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: vkLoginSessionId }),
+      });
+    } catch {
+      /* ignore */
+    }
+    setVkLoginSessionId(null);
+    setVkLoginStatus(null);
+    setVkLoginStepMessage(null);
+    setVkLoginScreenshot(null);
+    setVkLoginQrImage(null);
+    setVkLoginStepValue('');
+  };
+
+  // Poll the server while waiting for the user to scan a QR code
+  useEffect(() => {
+    if (!vkLoginSessionId || vkLoginStatus !== 'awaiting_qr') return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const res = await fetch(
+          `${API_URL}/api/publishing/auth/vk/login/poll/${vkLoginSessionId}`,
+        );
+        const data = await res.json();
+        if (cancelled) return;
+        if (data.success) applyVkLoginResult(data.data);
+      } catch {
+        /* ignore transient errors */
+      }
+    };
+    const iv = setInterval(tick, 3000);
+    return () => {
+      cancelled = true;
+      clearInterval(iv);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [vkLoginSessionId, vkLoginStatus]);
+
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-[400px]">
@@ -294,6 +450,152 @@ export default function Settings() {
                 </div>
 
                 <div className="space-y-3">
+                  {/* VK Playwright Login (VK only) */}
+                  {platform.platform === 'vk' && (
+                    <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                      <h4 className="font-medium text-blue-900 mb-1">
+                        🤖 Вход через Playwright (рекомендуется)
+                      </h4>
+                      <p className="text-xs text-blue-800 mb-3">
+                        Вход в VK прямо с сервера — cookies будут привязаны к IP сервера,
+                        что нужно для публикации VK Статей. Быстрее всего через QR-код
+                        из мобильного приложения VK.
+                      </p>
+
+                      {!vkLoginSessionId ? (
+                        <div className="space-y-3">
+                          {/* QR option */}
+                          <button
+                            onClick={handleStartVkLoginQr}
+                            disabled={saving === 'vk-login-qr'}
+                            className="w-full flex items-center justify-center gap-2 px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                          >
+                            {saving === 'vk-login-qr' ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : null}
+                            📱 Войти через QR-код
+                          </button>
+
+                          <div className="flex items-center gap-3">
+                            <div className="flex-1 h-px bg-blue-200" />
+                            <span className="text-xs text-blue-700">или через пароль</span>
+                            <div className="flex-1 h-px bg-blue-200" />
+                          </div>
+
+                          <div className="space-y-2">
+                            <input
+                              type="text"
+                              value={vkLoginEmail}
+                              onChange={(e) => setVkLoginEmail(e.target.value)}
+                              placeholder="Email или телефон (+7...)"
+                              className="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                              disabled={saving === 'vk-login'}
+                            />
+                            <input
+                              type="password"
+                              value={vkLoginPassword}
+                              onChange={(e) => setVkLoginPassword(e.target.value)}
+                              placeholder="Пароль"
+                              className="w-full p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                              disabled={saving === 'vk-login'}
+                            />
+                            <button
+                              onClick={handleStartVkLogin}
+                              disabled={saving === 'vk-login'}
+                              className="flex items-center gap-2 px-4 py-2 bg-white border border-blue-600 text-blue-700 rounded-lg hover:bg-blue-50 disabled:opacity-50"
+                            >
+                              {saving === 'vk-login' ? (
+                                <Loader2 className="w-4 h-4 animate-spin" />
+                              ) : null}
+                              Войти с паролем
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="text-sm text-gray-700">
+                            <strong>Статус:</strong>{' '}
+                            <span className="font-mono">{vkLoginStatus}</span>
+                          </div>
+                          {vkLoginStepMessage && (
+                            <div className="text-sm text-blue-900 font-medium">
+                              {vkLoginStepMessage}
+                            </div>
+                          )}
+
+                          {/* QR code: big & centered */}
+                          {vkLoginStatus === 'awaiting_qr' && vkLoginQrImage && (
+                            <div className="flex flex-col items-center gap-2 p-4 bg-white border border-blue-300 rounded-lg">
+                              <img
+                                src={vkLoginQrImage}
+                                alt="VK login QR code"
+                                className="w-64 h-64 object-contain"
+                              />
+                              <p className="text-xs text-gray-600 text-center max-w-xs">
+                                Откройте мобильное приложение VK →
+                                «Настройки» → «Вход по QR-коду» →
+                                наведите камеру на код.
+                                <br />
+                                Ожидаем сканирование (проверка каждые 3 сек)…
+                              </p>
+                            </div>
+                          )}
+
+                          {/* Page screenshot — only if no QR to keep UI compact */}
+                          {!(vkLoginStatus === 'awaiting_qr' && vkLoginQrImage) &&
+                            vkLoginScreenshot && (
+                              <img
+                                src={vkLoginScreenshot}
+                                alt="VK login screenshot"
+                                className="w-full border border-gray-300 rounded-lg"
+                              />
+                            )}
+                          {(vkLoginStatus === 'awaiting_sms' ||
+                            vkLoginStatus === 'awaiting_captcha' ||
+                            vkLoginStatus === 'awaiting_password' ||
+                            vkLoginStatus === 'awaiting_2fa') && (
+                            <div className="flex gap-2">
+                              <input
+                                type={vkLoginStatus === 'awaiting_password' ? 'password' : 'text'}
+                                value={vkLoginStepValue}
+                                onChange={(e) => setVkLoginStepValue(e.target.value)}
+                                placeholder={
+                                  vkLoginStatus === 'awaiting_sms'
+                                    ? 'Код из SMS'
+                                    : vkLoginStatus === 'awaiting_captcha'
+                                    ? 'Символы с картинки'
+                                    : vkLoginStatus === 'awaiting_password'
+                                    ? 'Пароль'
+                                    : 'Код'
+                                }
+                                className="flex-1 p-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-blue-500"
+                                disabled={saving === 'vk-login-step'}
+                                onKeyDown={(e) => e.key === 'Enter' && handleSubmitVkStep()}
+                              />
+                              <button
+                                onClick={handleSubmitVkStep}
+                                disabled={saving === 'vk-login-step'}
+                                className="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50"
+                              >
+                                {saving === 'vk-login-step' ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  'Отправить'
+                                )}
+                              </button>
+                            </div>
+                          )}
+                          <button
+                            onClick={handleCancelVkLogin}
+                            className="text-sm text-red-600 hover:underline"
+                          >
+                            Отменить вход
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
                   <textarea
                     value={cookieInput}
                     onChange={(e) => setCookieInput(e.target.value)}
