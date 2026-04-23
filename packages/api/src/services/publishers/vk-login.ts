@@ -198,7 +198,24 @@ async function detectLoginState(page: Page): Promise<{
   const url = page.url();
   console.log(`   🔍 Detecting state on: ${url}`);
 
-  // Logged in successfully
+  // First, check for the remixsid cookie — this is VK's main session cookie
+  // and its presence means the user is authenticated, regardless of URL.
+  // This works for the iframe-style QR auth page (only_qr=1) where the
+  // page itself never navigates after scan (it would postMessage the parent).
+  try {
+    const cookies = await page.context().cookies();
+    const hasRemixsid = cookies.some(
+      c => c.name === 'remixsid' || c.name === 'remixnsid',
+    );
+    if (hasRemixsid) {
+      console.log(`   ✅ remixsid cookie present — user is authenticated`);
+      return { status: 'done' };
+    }
+  } catch {
+    /* ignore */
+  }
+
+  // Logged in by URL
   if (
     url.startsWith('https://vk.com/feed') ||
     url.match(/^https:\/\/vk\.com\/?(\?.*)?$/) ||
@@ -212,6 +229,26 @@ async function detectLoginState(page: Page): Promise<{
       .catch(() => false);
     if (hasTopMenu || url.includes('/feed') || url.includes('/id')) {
       return { status: 'done' };
+    }
+  }
+
+  // Universal QR check — works on any URL (id.vk.com/auth, vk.com/, etc.)
+  const canvases = page.locator('canvas');
+  const canvasCount = await canvases.count().catch(() => 0);
+  for (let i = 0; i < Math.min(canvasCount, 5); i++) {
+    const box = await canvases
+      .nth(i)
+      .boundingBox()
+      .catch(() => null);
+    if (box && box.width >= 100 && box.height >= 100 && Math.abs(box.width - box.height) < 20) {
+      // Square-ish canvas of reasonable size is very likely a QR code
+      console.log(
+        `   🟦 Found QR-like canvas #${i}: ${box.width}x${box.height}`,
+      );
+      return {
+        status: 'awaiting_qr',
+        message: 'Отсканируйте QR-код мобильным приложением VK',
+      };
     }
   }
 
@@ -323,6 +360,21 @@ async function detectLoginState(page: Page): Promise<{
 
 /** Save cookies from Playwright context to vk-state.json (the format vk-articles.ts expects). */
 async function saveCookies(context: BrowserContext): Promise<{ path: string; count: number }> {
+  // Ensure we have all vk.com cookies: visit vk.com/ to let the server issue
+  // any secondary cookies (l, remixdt, remixsslsid) that weren't set on id.vk.com.
+  try {
+    const page = context.pages()[0];
+    if (page && !page.url().startsWith('https://vk.com/')) {
+      console.log(`   🌐 Finalising session: navigating to vk.com/ to collect all cookies`);
+      await page
+        .goto('https://vk.com/', { waitUntil: 'networkidle', timeout: 20_000 })
+        .catch(() => {});
+      await sleep(1500);
+    }
+  } catch {
+    /* ignore */
+  }
+
   const cookies = await context.cookies();
 
   // Filter and convert to the format expected by vk-articles.ts
@@ -384,31 +436,132 @@ export async function startVkLoginQr(): Promise<LoginStepResult> {
   const page = await context.newPage();
 
   try {
-    // id.vk.com shows QR by default; fallback to vk.com/login which redirects
-    console.log(`   🌐 Navigating to https://id.vk.com/`);
-    await page.goto('https://id.vk.com/', {
-      waitUntil: 'domcontentloaded',
-      timeout: 30_000,
-    });
-    await sleep(2500);
+    // vk.com/login is the official entry point; anonymous visitors are
+    // redirected to id.vk.com/auth?... which shows the QR by default.
+    // Going directly to id.vk.com/ lands on the marketing page (/about/id).
+    // Direct URL to VK's QR authentication page (the iframe that vk.com embeds).
+    // `only_qr=1` renders just the QR canvas, no surrounding UI.
+    // Discovered from a HAR capture of a real browser login flow.
+    const QR_AUTH_URL =
+      'https://id.vk.com/qr_auth?scheme=bright_light&app_id=7913379&' +
+      'origin=https%3A%2F%2Fvk.com&only_qr=1';
 
-    // Try to find a "Log in with QR" button if not shown by default
+    console.log(`   🌐 Navigating directly to QR auth URL`);
+    await page.goto(QR_AUTH_URL, {
+      waitUntil: 'networkidle',
+      timeout: 30_000,
+      referer: 'https://vk.com/',
+    });
+    await sleep(2000);
+    let currentUrl = page.url();
+    console.log(`   📍 Landed on: ${currentUrl}`);
+
+    // Handle "I'm not a robot" challenge if it appears
+    if (currentUrl.includes('challenge.html') || currentUrl.includes('hash429')) {
+      console.log(`   🤖 Anti-bot challenge detected, attempting to solve`);
+      await savePageScreenshot(page, `vk-qr_challenge_${id}`);
+      // Try common VKUI challenge buttons
+      const challengeBtn = page
+        .locator(
+          [
+            'button:has-text("Я не робот")',
+            'button:has-text("Продолжить")',
+            'button:has-text("Continue")',
+            'button[type="submit"]',
+            '[role="button"]',
+          ].join(', '),
+        )
+        .first();
+      const hasBtn = await challengeBtn.isVisible({ timeout: 3000 }).catch(() => false);
+      if (hasBtn) {
+        console.log(`   👆 Clicking challenge button`);
+        await challengeBtn.click().catch(() => {});
+        await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
+        await sleep(2000);
+        // Re-navigate to QR page after challenge passed
+        await page
+          .goto(QR_AUTH_URL, { waitUntil: 'networkidle', timeout: 30_000 })
+          .catch(() => {});
+        await sleep(2000);
+      } else {
+        console.log(`   ⚠️ No challenge button found — page may use silent PX check`);
+      }
+      currentUrl = page.url();
+      console.log(`   📍 After challenge: ${currentUrl}`);
+    }
+
+    // Fallback chain if still not on QR page
+    if (
+      !currentUrl.includes('qr_auth') &&
+      !currentUrl.includes('id.vk.com/auth') &&
+      !currentUrl.includes('id.vk.com/login')
+    ) {
+      console.log(`   ↪️ Not on QR page, trying vk.com/login flow`);
+      await page
+        .goto('https://vk.com/login', { waitUntil: 'networkidle', timeout: 30_000 })
+        .catch(() => {});
+      await sleep(2500);
+      currentUrl = page.url();
+      console.log(`   📍 After /login: ${currentUrl}`);
+
+      if (currentUrl.includes('challenge.html')) {
+        const btn = page
+          .locator('button[type="submit"], button:has-text("Продолжить"), [role="button"]')
+          .first();
+        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
+          await btn.click().catch(() => {});
+          await sleep(3000);
+        }
+      }
+
+      // Retry QR URL now that cookies/session are established
+      await page
+        .goto(QR_AUTH_URL, { waitUntil: 'networkidle', timeout: 30_000 })
+        .catch(() => {});
+      await sleep(2500);
+      currentUrl = page.url();
+      console.log(`   📍 After QR retry: ${currentUrl}`);
+    }
+
+    // Expand any collapsed "QR" tab if present (on id.vk.com/auth it's shown by default,
+    // but on some flows user must click the QR icon)
     const qrButton = page
       .locator(
-        'button:has-text("QR"), [data-testid*="qr" i], a:has-text("QR")',
+        [
+          'button:has-text("QR")',
+          'a:has-text("QR")',
+          'button:has-text("по QR")',
+          'a:has-text("по QR")',
+          'button[data-testid*="qr" i]',
+          'a[data-testid*="qr" i]',
+          '[role="button"]:has-text("QR")',
+        ].join(', '),
       )
       .first();
     const qrButtonVisible = await qrButton
-      .isVisible({ timeout: 1500 })
+      .isVisible({ timeout: 2000 })
       .catch(() => false);
     if (qrButtonVisible) {
       console.log(`   👆 Clicking QR login button`);
       await qrButton.click().catch(() => {});
-      await sleep(2000);
+      await sleep(2500);
+    } else {
+      console.log(`   ℹ️ No explicit QR button found, checking current state`);
     }
 
     const state = await detectLoginState(page);
     console.log(`   📊 Initial QR state: ${state.status} — ${state.message || ''}`);
+
+    if (state.status === 'error') {
+      // Save full-page screenshot for debugging
+      await savePageScreenshot(page, `vk-qr_unknown_${id}`);
+      // Dump visible text for diagnostics
+      const bodyText = await page
+        .locator('body')
+        .innerText()
+        .catch(() => '');
+      console.log(`   📝 Page text (first 500 chars): ${bodyText.slice(0, 500)}`);
+    }
 
     const qrImage =
       state.status === 'awaiting_qr' ? await grabQrImage(page) : null;
@@ -447,7 +600,6 @@ export async function startVkLoginQr(): Promise<LoginStepResult> {
         currentUrl: page.url(),
       };
     }
-
     return {
       sessionId: id,
       status: state.status,
