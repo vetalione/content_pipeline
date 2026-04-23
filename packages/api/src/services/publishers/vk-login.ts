@@ -159,6 +159,81 @@ async function applyStealth(context: BrowserContext) {
   });
 }
 
+/**
+ * Handle VK's "Я не робот" anti-bot challenge page.
+ *
+ * VK uses an interstitial page at `vk.com/challenge.html?tid=...&hash429=...`
+ * before many flows (login, /club, QR auth). The page contains a single
+ * button:
+ *   <button class="start " type="button">Продолжить</button>
+ * Clicking it triggers client-side JS that validates the session and then
+ * redirects the browser back to the originally requested URL.
+ *
+ * Captured from a real HAR: click → navigation to original target →
+ * login.vk.com?…&validate_result=4 confirmation.
+ *
+ * Returns true if challenge was passed (or wasn't there), false on failure.
+ */
+async function passAntiBotChallenge(page: Page, id: string): Promise<boolean> {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const url = page.url();
+    const onChallenge = url.includes('challenge.html') || url.includes('hash429');
+    if (!onChallenge) return true;
+
+    console.log(`   🤖 Anti-bot challenge (attempt ${attempt}/3): ${url.substring(0, 120)}`);
+    await savePageScreenshot(page, `vk-challenge_${id}_a${attempt}`);
+
+    // Button VK renders on challenge.html: <button class="start " type="button">Продолжить</button>
+    // Match by class first (most reliable), fall back to visible text.
+    const btn = page
+      .locator(
+        [
+          'button.start',
+          'button[class~="start"]',
+          'button:has-text("Продолжить")',
+          'button:has-text("Continue")',
+          'button[type="button"]:has-text("Продолжить")',
+          'button[type="submit"]',
+        ].join(', '),
+      )
+      .first();
+
+    const visible = await btn.isVisible({ timeout: 8000 }).catch(() => false);
+    if (!visible) {
+      console.log(`   ⚠️ Challenge button "Продолжить" not found within 8s`);
+      // Try reloading — sometimes VK serves a stale challenge page
+      await page.reload({ waitUntil: 'domcontentloaded', timeout: 15_000 }).catch(() => {});
+      await sleep(2000);
+      continue;
+    }
+
+    // The challenge page often has a short "arming" delay (JS needs to finish
+    // collecting fingerprint/timing signals before the click is accepted).
+    await sleep(2000);
+
+    console.log(`   👆 Clicking challenge "Продолжить" button`);
+    // Click and wait for either navigation or URL change off challenge.html.
+    await Promise.all([
+      page
+        .waitForURL((u) => !u.href.includes('challenge.html'), { timeout: 20_000 })
+        .catch(() => null),
+      btn.click({ timeout: 5000 }).catch((e) => {
+        console.log(`   ⚠️ Click failed: ${e?.message ?? e}`);
+      }),
+    ]);
+    await page.waitForLoadState('networkidle', { timeout: 10_000 }).catch(() => {});
+    await sleep(1500);
+
+    if (!page.url().includes('challenge.html')) {
+      console.log(`   ✅ Challenge passed → ${page.url().substring(0, 120)}`);
+      return true;
+    }
+  }
+
+  console.log(`   ❌ Anti-bot challenge not passed after 3 attempts`);
+  return false;
+}
+
 /** Try to grab the QR code image from the page as a base64 data URI. */
 async function grabQrImage(page: Page): Promise<string | null> {
   // VK renders the QR as either <canvas> or <img> inside a container with
@@ -456,38 +531,13 @@ export async function startVkLoginQr(): Promise<LoginStepResult> {
     let currentUrl = page.url();
     console.log(`   📍 Landed on: ${currentUrl}`);
 
-    // Handle "I'm not a robot" challenge if it appears
-    if (currentUrl.includes('challenge.html') || currentUrl.includes('hash429')) {
-      console.log(`   🤖 Anti-bot challenge detected, attempting to solve`);
-      await savePageScreenshot(page, `vk-qr_challenge_${id}`);
-      // Try common VKUI challenge buttons
-      const challengeBtn = page
-        .locator(
-          [
-            'button:has-text("Я не робот")',
-            'button:has-text("Продолжить")',
-            'button:has-text("Continue")',
-            'button[type="submit"]',
-            '[role="button"]',
-          ].join(', '),
-        )
-        .first();
-      const hasBtn = await challengeBtn.isVisible({ timeout: 3000 }).catch(() => false);
-      if (hasBtn) {
-        console.log(`   👆 Clicking challenge button`);
-        await challengeBtn.click().catch(() => {});
-        await page.waitForLoadState('networkidle', { timeout: 15_000 }).catch(() => {});
-        await sleep(2000);
-        // Re-navigate to QR page after challenge passed
-        await page
-          .goto(QR_AUTH_URL, { waitUntil: 'networkidle', timeout: 30_000 })
-          .catch(() => {});
-        await sleep(2000);
-      } else {
-        console.log(`   ⚠️ No challenge button found — page may use silent PX check`);
-      }
-      currentUrl = page.url();
-      console.log(`   📍 After challenge: ${currentUrl}`);
+    // Handle "Я не робот" challenge interstitial if it appears. VK renders
+    // a page with a single <button class="start ">Продолжить</button> — clicking
+    // it triggers client-side validation and a redirect back to the original URL.
+    const challengePassed = await passAntiBotChallenge(page, id);
+    currentUrl = page.url();
+    if (!challengePassed) {
+      await savePageScreenshot(page, `vk-qr_challenge_failed_${id}`);
     }
 
     // Fallback chain if still not on QR page
@@ -504,21 +554,15 @@ export async function startVkLoginQr(): Promise<LoginStepResult> {
       currentUrl = page.url();
       console.log(`   📍 After /login: ${currentUrl}`);
 
-      if (currentUrl.includes('challenge.html')) {
-        const btn = page
-          .locator('button[type="submit"], button:has-text("Продолжить"), [role="button"]')
-          .first();
-        if (await btn.isVisible({ timeout: 2000 }).catch(() => false)) {
-          await btn.click().catch(() => {});
-          await sleep(3000);
-        }
-      }
+      await passAntiBotChallenge(page, id);
 
       // Retry QR URL now that cookies/session are established
       await page
         .goto(QR_AUTH_URL, { waitUntil: 'networkidle', timeout: 30_000 })
         .catch(() => {});
       await sleep(2500);
+      // Challenge can reappear after the retry navigation too.
+      await passAntiBotChallenge(page, id);
       currentUrl = page.url();
       console.log(`   📍 After QR retry: ${currentUrl}`);
     }
@@ -633,6 +677,13 @@ export async function pollVkLogin(sessionId: string): Promise<LoginStepResult> {
   }
   s.updatedAt = Date.now();
 
+  // If VK throws up a challenge page mid-session (e.g. while the user is
+  // scanning the QR), auto-solve it before state detection.
+  const curUrl = s.page.url();
+  if (curUrl.includes('challenge.html') || curUrl.includes('hash429')) {
+    await passAntiBotChallenge(s.page, sessionId);
+  }
+
   const state = await detectLoginState(s.page);
   s.status = state.status;
   s.message = state.message;
@@ -718,6 +769,9 @@ export async function startVkLogin(
 
     // Wait for the login form to appear
     await sleep(1500);
+
+    // Handle VK's anti-bot challenge page if it interrupts the login flow.
+    await passAntiBotChallenge(page, id);
 
     const currentUrl = page.url();
     console.log(`   📍 Landed on: ${currentUrl}`);
