@@ -91,6 +91,29 @@ async function cleanupSession(sessionId: string): Promise<void> {
   }
 }
 
+/**
+ * Last-chance check before closing a failing session: if VK has already
+ * set a `remixsid` cookie (user may have completed the flow in a way our
+ * state machine didn't recognise — e.g. scanned a QR that wasn't detected),
+ * save the session and return true. Caller should treat the outcome as
+ * success and skip the error path.
+ */
+async function tryRescueCookies(context: BrowserContext): Promise<boolean> {
+  try {
+    const cookies = await context.cookies();
+    const hasRemixsid = cookies.some(
+      (c) => c.name === 'remixsid' || c.name === 'remixnsid',
+    );
+    if (!hasRemixsid) return false;
+    console.log(`   🛟 Rescue: remixsid cookie found before close — saving session`);
+    await saveCookies(context);
+    return true;
+  } catch (err: any) {
+    console.log(`   ⚠️ Rescue attempt failed: ${err?.message ?? err}`);
+    return false;
+  }
+}
+
 // Periodic cleanup of stale sessions
 setInterval(() => {
   const now = Date.now();
@@ -262,6 +285,28 @@ async function grabQrImage(page: Page): Promise<string | null> {
       /* try next */
     }
   }
+
+  // Geometry fallback — any canvas or img in the viewport that is
+  // roughly square and at least 180px. id.vk.com QR is ~280×280 <img>.
+  try {
+    const qrLike = page.locator('canvas, img');
+    const count = await qrLike.count().catch(() => 0);
+    for (let i = 0; i < Math.min(count, 20); i++) {
+      const el = qrLike.nth(i);
+      const box = await el.boundingBox().catch(() => null);
+      if (!box) continue;
+      if (box.width < 180 || box.height < 180) continue;
+      const ratio = box.width / box.height;
+      if (ratio < 0.7 || ratio > 1.4) continue;
+      const buf = await el.screenshot({ type: 'png' }).catch(() => null);
+      if (buf && buf.length > 200) {
+        return `data:image/png;base64,${buf.toString('base64')}`;
+      }
+    }
+  } catch {
+    /* ignore */
+  }
+
   return null;
 }
 
@@ -308,23 +353,36 @@ async function detectLoginState(page: Page): Promise<{
   }
 
   // Universal QR check — works on any URL (id.vk.com/auth, vk.com/, etc.)
-  const canvases = page.locator('canvas');
-  const canvasCount = await canvases.count().catch(() => 0);
-  for (let i = 0; i < Math.min(canvasCount, 5); i++) {
-    const box = await canvases
-      .nth(i)
-      .boundingBox()
-      .catch(() => null);
-    if (box && box.width >= 100 && box.height >= 100 && Math.abs(box.width - box.height) < 20) {
-      // Square-ish canvas of reasonable size is very likely a QR code
-      console.log(
-        `   🟦 Found QR-like canvas #${i}: ${box.width}x${box.height}`,
-      );
-      return {
-        status: 'awaiting_qr',
-        message: 'Отсканируйте QR-код мобильным приложением VK',
-      };
-    }
+  // First, localized text anchor (strongest signal, no false positives).
+  const qrTextVisible = await page
+    .locator(
+      ':text-matches("Наведите камеру", "i"), :text-matches("Вход ВКонтакте", "i")',
+    )
+    .first()
+    .isVisible({ timeout: 500 })
+    .catch(() => false);
+  if (qrTextVisible) {
+    console.log(`   🟦 Found QR page by localized text anchor`);
+    return {
+      status: 'awaiting_qr',
+      message: 'Отсканируйте QR-код мобильным приложением VK',
+    };
+  }
+
+  // Geometry — any <canvas> OR <img> roughly square, ≥180×180.
+  const qrLikeEls = page.locator('canvas, img');
+  const qrLikeCount = await qrLikeEls.count().catch(() => 0);
+  for (let i = 0; i < Math.min(qrLikeCount, 20); i++) {
+    const box = await qrLikeEls.nth(i).boundingBox().catch(() => null);
+    if (!box) continue;
+    if (box.width < 180 || box.height < 180) continue;
+    const ratio = box.width / box.height;
+    if (ratio < 0.7 || ratio > 1.4) continue;
+    console.log(`   🟦 Found QR-like element #${i}: ${box.width}x${box.height}`);
+    return {
+      status: 'awaiting_qr',
+      message: 'Отсканируйте QR-код мобильным приложением VK',
+    };
   }
 
   // id.vk.com flows
@@ -482,26 +540,41 @@ async function waitForMeaningfulState(
       return { status: 'awaiting_password', hasLoginForm: true };
     }
 
-    // QR-like canvas? Same heuristic as detectLoginState.
-    const canvases = page.locator('canvas');
-    const canvasCount = await canvases.count().catch(() => 0);
-    for (let i = 0; i < Math.min(canvasCount, 5); i++) {
-      const box = await canvases
-        .nth(i)
-        .boundingBox()
-        .catch(() => null);
-      if (
-        box &&
-        box.width >= 100 &&
-        box.height >= 100 &&
-        Math.abs(box.width - box.height) < 20
-      ) {
-        return {
-          status: 'awaiting_qr',
-          message: 'Отсканируйте QR-код мобильным приложением VK',
-          hasLoginForm: false,
-        };
-      }
+    // QR-like image or canvas? VK on id.vk.com renders the QR as an <img>
+    // inside a card with the text "Наведите камеру устройства на QR-код".
+    // Older vk.com pages use <canvas>. Accept both.
+    //
+    // 1) Fast path — the localized helper text is a very reliable anchor.
+    const qrText = await page
+      .locator(
+        ':text-matches("Наведите камеру", "i"), :text-matches("Вход ВКонтакте", "i"), :text-matches("QR-код", "i")',
+      )
+      .first()
+      .isVisible({ timeout: 250 })
+      .catch(() => false);
+    if (qrText) {
+      return {
+        status: 'awaiting_qr',
+        message: 'Отсканируйте QR-код мобильным приложением VK',
+        hasLoginForm: false,
+      };
+    }
+
+    // 2) Geometry path — any <canvas> or <img> that is roughly square
+    // (within 40% aspect tolerance) and ≥180×180. id.vk.com QR is ~280×280.
+    const qrLike = page.locator('canvas, img');
+    const qrCount = await qrLike.count().catch(() => 0);
+    for (let i = 0; i < Math.min(qrCount, 15); i++) {
+      const box = await qrLike.nth(i).boundingBox().catch(() => null);
+      if (!box) continue;
+      if (box.width < 180 || box.height < 180) continue;
+      const ratio = box.width / box.height;
+      if (ratio < 0.7 || ratio > 1.4) continue;
+      return {
+        status: 'awaiting_qr',
+        message: 'Отсканируйте QR-код мобильным приложением VK',
+        hasLoginForm: false,
+      };
     }
 
     // Full detect pass — catches SMS/captcha/feed.
@@ -723,6 +796,16 @@ export async function startVkLoginQr(): Promise<LoginStepResult> {
     }
 
     if (state.status === 'error') {
+      // Last-chance rescue: if remixsid is already set (user may have
+      // completed a flow we didn't recognise), treat as success.
+      if (await tryRescueCookies(context)) {
+        await cleanupSession(id);
+        return {
+          sessionId: id,
+          status: 'done',
+          message: 'Успешный вход (восстановлено по cookies).',
+        };
+      }
       await savePageScreenshot(page, `vk-qr_error_${id}`);
       await cleanupSession(id);
       return {
@@ -743,6 +826,14 @@ export async function startVkLoginQr(): Promise<LoginStepResult> {
     };
   } catch (err: any) {
     console.error(`   ❌ VK QR login error: ${err.message}`);
+    if (await tryRescueCookies(context)) {
+      await cleanupSession(id);
+      return {
+        sessionId: id,
+        status: 'done',
+        message: 'Успешный вход (восстановлено по cookies после ошибки).',
+      };
+    }
     await savePageScreenshot(page, `vk-qr_exception_${id}`);
     const screenshot = await takeScreenshot(page).catch(() => '');
     await cleanupSession(id);
@@ -868,9 +959,10 @@ export async function startVkLogin(
     // VK often responds to a fresh server-IP visit to /login by redirecting
     // to https://vk.com/ and showing a QR code instead of the credential
     // form (to avoid the password step from an unseen IP). Before trying
-    // to fill credentials, wait up to 10s for either a login input or a
-    // QR canvas to appear, then branch on what we got.
-    const initial = await waitForMeaningfulState(page, 10_000);
+    // to fill credentials, wait up to 30s for either a login input or a
+    // QR canvas/img to appear, then branch on what we got. Railway IPs
+    // sometimes take 10–15s for the QR card to finish rendering.
+    const initial = await waitForMeaningfulState(page, 30_000);
     console.log(`   🔎 Initial state after /login: ${initial.status}`);
 
     if (initial.status === 'done') {
@@ -1028,6 +1120,14 @@ export async function startVkLogin(
     }
 
     if (state.status === 'error') {
+      if (await tryRescueCookies(context)) {
+        await cleanupSession(id);
+        return {
+          sessionId: id,
+          status: 'done',
+          message: 'Успешный вход (восстановлено по cookies).',
+        };
+      }
       await savePageScreenshot(page, `vk-login_error_${id}`);
       const screenshot = await takeScreenshot(page);
       await cleanupSession(id);
@@ -1054,6 +1154,14 @@ export async function startVkLogin(
     };
   } catch (err: any) {
     console.error(`   ❌ VK login error: ${err.message}`);
+    if (await tryRescueCookies(context)) {
+      await cleanupSession(id);
+      return {
+        sessionId: id,
+        status: 'done',
+        message: 'Успешный вход (восстановлено по cookies после ошибки).',
+      };
+    }
     await savePageScreenshot(page, `vk-login_exception_${id}`);
     const screenshot = await takeScreenshot(page).catch(() => '');
     await cleanupSession(id);
