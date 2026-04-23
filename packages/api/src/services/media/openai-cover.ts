@@ -43,8 +43,9 @@ export async function generateCoverImageOpenAI(options: CoverGenerationOptions):
         body: JSON.stringify({
           model: 'gpt-image-2',
           prompt,
-          // Closest landscape to 16:9 supported by gpt-image-2
-          size: '1536x1024',
+          // True 16:9 landscape at 2K — matches the "16:9, 4K" spec in the prompt
+          // (3840x2160 is also supported but doubles cost for marginal gain).
+          size: '2048x1152',
           quality: 'high',
           n: 1,
         }),
