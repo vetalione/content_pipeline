@@ -169,7 +169,7 @@ async function uploadPhotoToVK(imagePath: string): Promise<string | null> {
 
 async function createWallPost(
   message: string,
-  photoAttachment: string | null
+  attachments: string[]
 ): Promise<string> {
   const groupId = getGroupId();
 
@@ -179,8 +179,9 @@ async function createWallPost(
     message,
   };
 
-  if (photoAttachment) {
-    params.attachments = photoAttachment;
+  if (attachments.length > 0) {
+    // VK allows up to 10 attachments per post, comma-separated
+    params.attachments = attachments.slice(0, 10).join(',');
   }
 
   const result = await vkApi('wall.post', params);
@@ -195,24 +196,30 @@ async function createWallPost(
 function buildWallText(title: string, content: ArticleContent): string {
   const parts: string[] = [];
 
-  // Title
-  parts.push(`📰 ${title}`);
+  // Title — emphasized with emoji + uppercase
+  parts.push(`📰 ${title.toUpperCase()}`);
+  parts.push('');
+  parts.push('━━━━━━━━━━━━━━━━━━━━');
   parts.push('');
 
   // Teaser
   if (content.teaser) {
     parts.push(content.teaser);
     parts.push('');
-    parts.push('—'.repeat(20));
-    parts.push('');
   }
 
   // Sections
-  for (const section of content.sections) {
-    parts.push(`📌 ${section.heading}`);
+  for (let i = 0; i < content.sections.length; i++) {
+    const section = content.sections[i];
+    const num = i + 1;
+    parts.push('');
+    parts.push(`▌ ${num}. ${section.heading.toUpperCase()}`);
     parts.push('');
     if (section.paragraph1) parts.push(section.paragraph1);
-    if (section.paragraph2) parts.push(section.paragraph2);
+    if (section.paragraph2) {
+      parts.push('');
+      parts.push(section.paragraph2);
+    }
     if (section.blockquote) {
       parts.push('');
       parts.push(`💬 «${section.blockquote}»`);
@@ -222,9 +229,9 @@ function buildWallText(title: string, content: ArticleContent): string {
 
   // Conclusion
   if (content.conclusion) {
-    parts.push('—'.repeat(20));
+    parts.push('━━━━━━━━━━━━━━━━━━━━');
     parts.push('');
-    parts.push(`📌 ${content.conclusion.heading}`);
+    parts.push(`✨ ${content.conclusion.heading.toUpperCase()}`);
     parts.push('');
     parts.push(content.conclusion.text);
     parts.push('');
@@ -232,25 +239,30 @@ function buildWallText(title: string, content: ArticleContent): string {
 
   // Hero quote
   if (content.heroQuote) {
-    parts.push(`💬 «${content.heroQuote.text}» — ${content.heroQuote.author}`);
+    parts.push('');
+    parts.push(`💭 «${content.heroQuote.text}»`);
+    parts.push(`    — ${content.heroQuote.author}`);
     parts.push('');
   }
 
   // Bonus fact
   if (content.bonusFact) {
-    parts.push('🎁 Бонусный факт:');
+    parts.push('');
+    parts.push('🎁 БОНУСНЫЙ ФАКТ:');
     parts.push(content.bonusFact);
     parts.push('');
   }
 
   // CTA
   if (content.cta) {
-    parts.push('—'.repeat(20));
+    parts.push('━━━━━━━━━━━━━━━━━━━━');
+    parts.push('');
     parts.push(content.cta);
   }
 
   // Brand ending
   if (content.brandEnding) {
+    parts.push('');
     parts.push(content.brandEnding);
   }
 
@@ -279,9 +291,9 @@ function buildWallTextWithLink(title: string, content: ArticleContent, articleUr
 
 /**
  * Publish article to VK:
- * 1. If VK cookies available → create VK Article (rich text)
- * 2. Upload cover photo for wall post
- * 3. Post to group wall (short teaser + article link, or full text if no article)
+ * 1. Try VK Article via cookies (optional — falls back on failure)
+ * 2. Upload cover + section images (up to 10 total)
+ * 3. Post to group wall with full formatted text + all images as carousel
  */
 export async function publishToVK(article: ArticleWithCover): Promise<{ url: string }> {
   const content = article.content as ArticleContent;
@@ -294,7 +306,7 @@ export async function publishToVK(article: ArticleWithCover): Promise<{ url: str
   console.log(`📰 Publishing to VK: "${title}"`);
   console.log('============================================================');
 
-  // 1. Try to create VK Article (requires cookies from Settings)
+  // 1. Try to create VK Article (requires cookies from Settings; may fail due to IP binding)
   let articleUrl: string | undefined;
   if (isVkSessionAvailable()) {
     try {
@@ -304,19 +316,44 @@ export async function publishToVK(article: ArticleWithCover): Promise<{ url: str
       console.log(`   ✅ VK Article: ${articleUrl}`);
     } catch (err: any) {
       console.warn(`   ⚠️ VK Article creation failed: ${err.message}`);
-      console.warn('   Continuing with wall post only...');
+      console.warn('   Continuing with rich wall post...');
     }
   } else {
-    console.log('   ℹ️ VK cookies not found — wall post only (upload cookies in Settings for articles)');
+    console.log('   ℹ️ VK cookies not found — using rich wall post format');
   }
 
-  // 2. Upload cover photo for wall post
-  let photoAttachment: string | null = null;
+  // 2. Upload ALL images for wall post carousel (cover + section images)
+  const attachments: string[] = [];
+
+  // 2a. Cover first
   if (coverImage) {
     console.log('🖼️  Uploading cover to VK...');
     const coverSrc = coverImage.processedImageUrl || coverImage.localPath || coverImage.originalImageUrl;
-    photoAttachment = await uploadPhotoToVK(coverSrc);
+    const att = await uploadPhotoToVK(coverSrc);
+    if (att) attachments.push(att);
   }
+
+  // 2b. Section images (VK allows up to 10 total attachments)
+  const remainingSlots = 10 - attachments.length;
+  if (remainingSlots > 0 && content.sections?.length) {
+    console.log(`🖼️  Uploading section images (up to ${remainingSlots})...`);
+    for (let i = 0; i < content.sections.length && attachments.length < 10; i++) {
+      const section = content.sections[i] as any;
+      if (section.imageUrl) {
+        try {
+          const att = await uploadPhotoToVK(section.imageUrl);
+          if (att) {
+            attachments.push(att);
+            console.log(`   ✅ Section ${i + 1} image uploaded`);
+          }
+        } catch (err: any) {
+          console.warn(`   ⚠️ Section ${i + 1} image failed: ${err.message}`);
+        }
+      }
+    }
+  }
+
+  console.log(`   📸 Total attachments: ${attachments.length}/10`);
 
   // 3. Build wall post text
   const message = articleUrl
@@ -326,7 +363,7 @@ export async function publishToVK(article: ArticleWithCover): Promise<{ url: str
 
   // 4. Post to VK wall
   console.log('📢 Posting to VK group wall...');
-  const postUrl = await createWallPost(message, photoAttachment);
+  const postUrl = await createWallPost(message, attachments);
   console.log(`   ✅ VK wall post: ${postUrl}`);
 
   // Return article URL if created, otherwise wall post URL
