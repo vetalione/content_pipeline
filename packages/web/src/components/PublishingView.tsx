@@ -19,6 +19,7 @@ const platformLabels: Record<Platform, string> = {
   [Platform.LINKEDIN]: 'LinkedIn',
   [Platform.THREADS]: 'Threads',
   [Platform.DZEN]: 'Яндекс.Дзен',
+  [Platform.PIKABU]: 'Пикабу',
 };
 
 export default function PublishingView({ articleId, publications }: Props) {
