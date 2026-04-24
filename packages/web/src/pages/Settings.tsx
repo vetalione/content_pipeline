@@ -39,6 +39,18 @@ export default function Settings() {
         '4. Вставьте JSON в поле ниже и нажмите "Сохранить"',
         '5. Также убедитесь что VK_ACCESS_TOKEN и VK_GROUP_ID настроены'
       ]
+    },
+    {
+      platform: 'pikabu',
+      name: 'Пикабу',
+      authenticated: false,
+      description: 'Публикация длинных постов на pikabu.ru',
+      instructions: [
+        '1. Откройте pikabu.ru в браузере и войдите в аккаунт',
+        '2. Установите расширение "EditThisCookie" или "Cookie-Editor"',
+        '3. Экспортируйте все cookies для pikabu.ru как JSON',
+        '4. Вставьте JSON в поле ниже и нажмите "Сохранить"'
+      ]
     }
   ]);
   
@@ -92,6 +104,19 @@ export default function Settings() {
             : p
         ));
       }
+
+      // Check Pikabu
+      const pikabuRes = await fetch(`${API_URL}/api/publishing/auth/pikabu/status`, {
+        signal: AbortSignal.timeout(5000)
+      });
+      if (pikabuRes.ok) {
+        const pikabuData = await pikabuRes.json();
+        setPlatforms(prev => prev.map(p =>
+          p.platform === 'pikabu'
+            ? { ...p, authenticated: pikabuData.data?.authenticated || false }
+            : p
+        ));
+      }
     } catch (error) {
       console.error('Failed to check auth status:', error);
     } finally {
@@ -131,7 +156,7 @@ export default function Settings() {
             cookies: parsed.map((c: any) => ({
               name: c.name,
               value: c.value,
-              domain: c.domain?.startsWith('.') ? c.domain : `.${c.domain || 'dzen.ru'}`,
+              domain: c.domain?.startsWith('.') ? c.domain : `.${c.domain || (platform === 'pikabu' ? 'pikabu.ru' : platform === 'vk' ? 'vk.com' : 'dzen.ru')}`,
               path: c.path || '/',
               expires: c.expirationDate || -1,
               httpOnly: c.httpOnly || false,
@@ -464,7 +489,7 @@ export default function Settings() {
 
                 <div className="flex gap-2 mb-4">
                   <a
-                    href={platform.platform === 'dzen' ? 'https://dzen.ru' : platform.platform === 'vk' ? 'https://vk.com' : '#'}
+                    href={platform.platform === 'dzen' ? 'https://dzen.ru' : platform.platform === 'vk' ? 'https://vk.com' : platform.platform === 'pikabu' ? 'https://pikabu.ru' : '#'}
                     target="_blank"
                     rel="noopener noreferrer"
                     className="inline-flex items-center gap-1 text-sm text-blue-600 hover:underline"

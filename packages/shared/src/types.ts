@@ -168,7 +168,8 @@ export enum Platform {
   TWITTER = 'twitter',
   LINKEDIN = 'linkedin',
   THREADS = 'threads',
-  DZEN = 'dzen'
+  DZEN = 'dzen',
+  PIKABU = 'pikabu'
 }
 
 export enum Language {

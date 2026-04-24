@@ -12,6 +12,7 @@ import {
 } from '../services/publishers/vk-login';
 import { setupDzenAuth } from '../services/publishers/dzen';
 import { publishToDzenApi } from '../services/publishers/dzen-api';
+import { publishToPikabu } from '../services/publishers/pikabu';
 import publishWithPlaywright from '../services/publishers/playwright';
 import { Platform } from '@content-pipeline/shared';
 import { prisma } from '../lib/db';
@@ -66,6 +67,14 @@ publishingRouter.post('/:articleId/publish', async (req, res, next) => {
               result = { url: dzenResult.url || '' };
               if (!dzenResult.success) {
                 throw new Error(dzenResult.error || 'Dzen publish failed');
+              }
+              break;
+            }
+            case Platform.PIKABU: {
+              const pikabuResult = await publishToPikabu(article as any);
+              result = { url: pikabuResult.url || '' };
+              if (!pikabuResult.success) {
+                throw new Error(pikabuResult.error || 'Pikabu publish failed');
               }
               break;
             }
@@ -298,6 +307,100 @@ publishingRouter.post('/auth/dzen/fp-token', async (req, res, next) => {
   } catch (error) {
     next(error);
   }
+});
+
+// ============ PIKABU AUTH ============
+
+// Upload Pikabu session (cookies JSON from browser extension)
+publishingRouter.post('/auth/pikabu/session', async (req, res, next) => {
+  try {
+    const { sessionData } = req.body;
+    if (!sessionData) {
+      return res.status(400).json({
+        success: false,
+        error: 'sessionData is required (JSON object with cookies array)',
+      });
+    }
+
+    // Normalize cookies — we only need name/value/domain for the HTTP cookie header,
+    // but keep the same shape as other platforms for consistency.
+    let processedData = sessionData;
+    if (sessionData.cookies && Array.isArray(sessionData.cookies)) {
+      processedData = {
+        ...sessionData,
+        cookies: sessionData.cookies.map((c: any) => ({
+          name: c.name,
+          value: c.value,
+          domain: c.domain,
+          path: c.path || '/',
+          expires: c.expires ?? c.expirationDate ?? -1,
+          httpOnly: c.httpOnly || false,
+          secure: c.secure !== false,
+          sameSite: convertSameSite(c.sameSite),
+        })),
+      };
+    }
+
+    const fs = await import('fs');
+    const path = await import('path');
+    const sessionsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+      ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'pikabu-sessions')
+      : path.resolve(__dirname, '../services/publishers/sessions');
+    const sessionPath = path.join(sessionsDir, 'pikabu-state.json');
+
+    if (!fs.existsSync(sessionsDir)) {
+      fs.mkdirSync(sessionsDir, { recursive: true });
+    }
+    fs.writeFileSync(sessionPath, JSON.stringify(processedData, null, 2));
+
+    const pikabuCookieCount = (processedData.cookies || []).filter(
+      (c: any) => c.domain && c.domain.includes('pikabu.ru')
+    ).length;
+    console.log(`✅ Pikabu session saved (${pikabuCookieCount} pikabu.ru cookies)`);
+
+    res.json({
+      success: true,
+      message: 'Pikabu session uploaded successfully',
+      path: sessionPath,
+      cookieCount: processedData.cookies?.length || 0,
+      pikabuCookieCount,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Check Pikabu auth status
+publishingRouter.get('/auth/pikabu/status', async (req, res) => {
+  const fs = await import('fs');
+  const path = await import('path');
+  const sessionsDir = process.env.RAILWAY_VOLUME_MOUNT_PATH
+    ? path.join(process.env.RAILWAY_VOLUME_MOUNT_PATH, 'pikabu-sessions')
+    : path.resolve(__dirname, '../services/publishers/sessions');
+  const sessionPath = path.join(sessionsDir, 'pikabu-state.json');
+
+  const hasSession = fs.existsSync(sessionPath);
+  let pikabuCookieCount = 0;
+  if (hasSession) {
+    try {
+      const data = JSON.parse(fs.readFileSync(sessionPath, 'utf-8'));
+      pikabuCookieCount = (data.cookies || []).filter(
+        (c: any) => c.domain && c.domain.includes('pikabu.ru')
+      ).length;
+    } catch {
+      /* ignore */
+    }
+  }
+
+  res.json({
+    success: true,
+    data: {
+      platform: 'pikabu',
+      authenticated: hasSession && pikabuCookieCount > 0,
+      sessionPath: hasSession ? sessionPath : null,
+      pikabuCookieCount,
+    },
+  });
 });
 
 // ============ VK AUTH ============
