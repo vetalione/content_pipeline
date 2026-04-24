@@ -548,7 +548,11 @@ export async function publishToDzenApi(
     const publicationId = await createDraft(cookieHeader, csrfToken);
 
     // Step 3: Build content blocks (uploads images during building)
-    const coverImage = article.coverImages?.[0] || article.coverImage;
+    // Prefer the cover the user explicitly marked as selected — matches VK/TG.
+    const coverImage =
+      article.coverImages?.find((c) => c.isSelected) ||
+      article.coverImages?.[0] ||
+      article.coverImage;
     const { blocks, coverImageId } = await buildBlocks(
       content, coverImage,
       cookieHeader, csrfToken, publicationId

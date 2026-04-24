@@ -1420,7 +1420,11 @@ export async function publishToDzen(
     await setTitle(page, content.title);
     
     // Step 2: Upload cover IMMEDIATELY after title (per Dzen editor logic)
-    const coverImage = article.coverImages?.[0] || article.coverImage;
+    // Prefer user-selected cover (matches VK/TG behaviour).
+    const coverImage =
+      article.coverImages?.find((c: any) => c.isSelected) ||
+      article.coverImages?.[0] ||
+      article.coverImage;
     if (coverImage) {
       await uploadCover(page, coverImage);
       // CRITICAL: After image upload, focus is lost!
