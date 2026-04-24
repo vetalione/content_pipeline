@@ -897,41 +897,13 @@ export async function pollVkLogin(sessionId: string): Promise<LoginStepResult> {
     await passAntiBotChallenge(s.page, sessionId);
   }
 
-  // Post-confirmation kick: once the page lands on
-  //   id.vk.com/auth?response_type=silent_token&sdk_type=vkid&...
-  // it waits for the user to tap "Подтвердить" in the VK app, after which
-  // VK ID fires window.opener.postMessage(silent_token). We opened the QR
-  // directly (no opener window), so the token is lost and the page hangs.
-  //
-  // The reliable workaround: once the user has confirmed on their phone,
-  // VK's server-side id.vk.com session is marked as authenticated, so if
-  // we navigate to vk.com/ ourselves the SSO handshake completes and
-  // remixsid is set on the vk.com domain. We try this on every poll when
-  // stuck on the silent_token URL — harmless if the user hasn't confirmed
-  // yet (we'll just land on the login page and keep polling).
-  if (
-    curUrl.includes('id.vk.com/auth') &&
-    (curUrl.includes('response_type=silent_token') ||
-      curUrl.includes('sdk_type=vkid'))
-  ) {
-    // Look for a confirmation button that VK sometimes shows on this page
-    // ("Продолжить", "Войти", "Готово") — click it first if visible.
-    const actionBtn = s.page.locator(
-      'button:has-text("Продолжить"), button:has-text("Войти"), button:has-text("Готово"), button:has-text("Подтвердить")',
-    );
-    const hasBtn = await actionBtn.first().isVisible({ timeout: 500 }).catch(() => false);
-    if (hasBtn) {
-      console.log(`   👉 Clicking confirmation button on silent_token page`);
-      await actionBtn.first().click().catch(() => {});
-      await sleep(1500);
-    } else {
-      console.log(`   🏁 Stuck on silent_token page — navigating to vk.com/ to complete SSO`);
-      await s.page
-        .goto('https://vk.com/', { waitUntil: 'domcontentloaded', timeout: 15_000 })
-        .catch((err) => console.log(`      ↳ nav failed: ${err?.message ?? err}`));
-      await sleep(2000);
-    }
-  }
+  // NOTE: we do NOT auto-navigate away from id.vk.com/auth?...silent_token...
+  // even though the QR flow parks there after the user scans. That page is
+  // supposed to deliver the token via window.opener.postMessage, which we
+  // don't have. The user must press the "Я авторизовался" button in the UI
+  // which invokes confirmVkLogin() — that explicitly navigates to vk.com/ to
+  // finish the SSO handshake. Doing it automatically on every poll caused
+  // the page to flap between the silent_token URL and the login page.
 
   const state = await detectLoginState(s.page);
   s.status = state.status;
@@ -1367,6 +1339,78 @@ export async function submitVkLoginStep(
 export async function cancelVkLogin(sessionId: string): Promise<void> {
   console.log(`   🚫 Cancelling VK login session ${sessionId}`);
   await cleanupSession(sessionId);
+}
+
+/**
+ * Manual "I confirmed on my phone" trigger for a QR session.
+ *
+ * VK ID's post-scan page (id.vk.com/auth?...silent_token...) expects the
+ * parent window to pick up the token via postMessage. When we open the
+ * QR directly there is no parent, so the page hangs after confirmation.
+ *
+ * This function force-navigates the session's page to https://vk.com/ —
+ * if the user has actually confirmed on their phone, VK's server-side
+ * session is authenticated and remixsid is set during that visit; we save
+ * cookies and close. Otherwise we return the current state.
+ */
+export async function confirmVkLogin(sessionId: string): Promise<LoginStepResult> {
+  const s = sessions.get(sessionId);
+  if (!s) {
+    throw new Error(`Session ${sessionId} not found or expired`);
+  }
+  s.updatedAt = Date.now();
+  console.log(`   🏁 Manual confirm for session ${sessionId} — navigating to vk.com/`);
+
+  try {
+    await s.page
+      .goto('https://vk.com/', { waitUntil: 'domcontentloaded', timeout: 20_000 })
+      .catch((err) =>
+        console.log(`      ↳ nav failed: ${err?.message ?? err}`),
+      );
+    await sleep(2500);
+
+    if (await tryRescueCookies(s.context)) {
+      await cleanupSession(sessionId);
+      return {
+        sessionId,
+        status: 'done',
+        message: 'Успешный вход. Cookies сохранены.',
+      };
+    }
+
+    // Not authenticated yet — return fresh state so UI can re-render QR or form.
+    const state = await detectLoginState(s.page);
+    s.status = state.status;
+    s.message = state.message;
+    const screenshot = await takeScreenshot(s.page).catch(() => '');
+    const qrImage =
+      state.status === 'awaiting_qr' ? await grabQrImage(s.page) : null;
+    return {
+      sessionId,
+      status: state.status,
+      message:
+        state.message ||
+        'Подтверждение не найдено. Попробуйте ещё раз подтвердить вход в приложении VK.',
+      screenshot,
+      qrImage: qrImage || undefined,
+      currentUrl: s.page.url(),
+    };
+  } catch (err: any) {
+    console.error(`   ❌ confirmVkLogin error: ${err.message}`);
+    if (await tryRescueCookies(s.context)) {
+      await cleanupSession(sessionId);
+      return {
+        sessionId,
+        status: 'done',
+        message: 'Успешный вход (восстановлено по cookies).',
+      };
+    }
+    return {
+      sessionId,
+      status: s.status,
+      message: err.message || 'Ошибка при подтверждении',
+    };
+  }
 }
 
 /** Get list of active session IDs (for debugging). */

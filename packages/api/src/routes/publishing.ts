@@ -8,6 +8,7 @@ import {
   listActiveSessions,
   startVkLoginQr,
   pollVkLogin,
+  confirmVkLogin,
 } from '../services/publishers/vk-login';
 import { setupDzenAuth } from '../services/publishers/dzen';
 import { publishToDzenApi } from '../services/publishers/dzen-api';
@@ -453,6 +454,24 @@ publishingRouter.post('/auth/vk/login/cancel', async (req, res, next) => {
     await cancelVkLogin(String(sessionId));
     res.json({ success: true });
   } catch (error) {
+    next(error);
+  }
+});
+
+// Manual "I confirmed on my phone" trigger for a QR session stuck on the
+// id.vk.com/auth?...silent_token... page (no window.opener to receive the token).
+publishingRouter.post('/auth/vk/login/confirm', async (req, res, next) => {
+  try {
+    const { sessionId } = req.body || {};
+    if (!sessionId) {
+      return res.status(400).json({ success: false, error: 'sessionId is required' });
+    }
+    const result = await confirmVkLogin(String(sessionId));
+    res.json({ success: true, data: result });
+  } catch (error: any) {
+    if (error?.message?.includes('not found')) {
+      return res.status(404).json({ success: false, error: error.message });
+    }
     next(error);
   }
 });

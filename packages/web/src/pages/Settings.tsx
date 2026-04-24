@@ -331,6 +331,31 @@ export default function Settings() {
     setVkLoginStepValue('');
   };
 
+  const handleConfirmVkLogin = async () => {
+    if (!vkLoginSessionId) return;
+    setSaving('vk-login-confirm');
+    try {
+      const response = await fetch(
+        `${API_URL}/api/publishing/auth/vk/login/confirm`,
+        {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId: vkLoginSessionId }),
+        },
+      );
+      const data = await response.json();
+      if (!data.success) throw new Error(data.error || 'Ошибка');
+      applyVkLoginResult(data.data);
+      if (data.data?.status === 'done') {
+        setMessage({ type: 'success', text: 'VK вход выполнен, cookies сохранены' });
+      }
+    } catch (error: any) {
+      setMessage({ type: 'error', text: error.message });
+    } finally {
+      setSaving(null);
+    }
+  };
+
   // Poll the server while waiting for the user to scan a QR code
   useEffect(() => {
     if (!vkLoginSessionId || vkLoginStatus !== 'awaiting_qr') return;
@@ -537,6 +562,19 @@ export default function Settings() {
                                 наведите камеру на код.
                                 <br />
                                 Ожидаем сканирование (проверка каждые 3 сек)…
+                              </p>
+                              <button
+                                onClick={handleConfirmVkLogin}
+                                disabled={saving === 'vk-login-confirm'}
+                                className="mt-2 flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+                              >
+                                {saving === 'vk-login-confirm' ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : null}
+                                Я авторизовался на телефоне
+                              </button>
+                              <p className="text-[11px] text-gray-500 text-center max-w-xs">
+                                Нажмите, если уже подтвердили вход в мобильном приложении VK — сервер дожмёт авторизацию.
                               </p>
                             </div>
                           )}
