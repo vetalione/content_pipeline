@@ -72,6 +72,7 @@ export interface BiographyFact {
   isDeleted?: boolean; // User manually deleted this fact
   isEdited?: boolean; // User manually edited this fact
   editedAt?: string; // ISO timestamp of last manual edit
+  sourceModel?: 'perplexity' | 'gpt' | 'claude' | 'gemini' | string; // Which AI model produced this fact
 }
 
 export interface Quote {

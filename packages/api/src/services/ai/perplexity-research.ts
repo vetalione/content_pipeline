@@ -75,13 +75,23 @@ export async function performPerplexityResearch(
     return count < MIN_FACTS;
   }
 
+  // Resolve language from article DB field — fixes bug where Russian-selected
+  // articles were getting English facts because we previously detected language
+  // by Cyrillic characters in the celebrity name (Russian celeb name written
+  // in Latin → English research → mismatch with user's Russian preference).
+  const articleLanguage: 'ru' | 'en' | 'both' = (article as any).language === 'en'
+    ? 'en'
+    : (article as any).language === 'both'
+      ? 'both'
+      : 'ru';
+  const useRussianPrompt = articleLanguage === 'ru' || articleLanguage === 'both';
+
   // Single Perplexity call — returns parsed raw data or throws
   async function callPerplexity(framing: PromptFraming, attempt: number): Promise<{ rawData: any; citations: string[] }> {
-    const isRussianCelebrity = /[а-яА-ЯёЁ]/.test(celebName);
-    const systemPromptText = isRussianCelebrity
+    const systemPromptText = useRussianPrompt
       ? getSystemPromptRu(framing)
       : getSystemPrompt(framing);
-    const userPromptText = createDeepResearchPrompt(celebName, framing);
+    const userPromptText = createDeepResearchPrompt(celebName, framing, articleLanguage);
 
     console.log(`  🔄 Perplexity attempt ${attempt + 1} (framing: ${framing})...`);
 
@@ -389,14 +399,22 @@ function getSystemPromptRu(framing: PromptFraming = 'documentary'): string {
 ВЫВОД: Отвечай только валидным JSON. Никакого текста до или после JSON-объекта.`;
 }
 
-function createDeepResearchPrompt(celebrityName: string, framing: PromptFraming = 'documentary'): string {
+function createDeepResearchPrompt(celebrityName: string, framing: PromptFraming = 'documentary', language: 'ru' | 'en' | 'both' = 'en'): string {
   const framingContext: Record<PromptFraming, string> = {
     documentary: `This is for an authorised biographical documentary about ${celebrityName}.`,
     academic:    `This is a graduate-level biographical case study about ${celebrityName}.`,
     journalistic:`This is a long-form profile piece about ${celebrityName} for a major magazine.`,
   };
 
-  return `${framingContext[framing]}
+  // CRITICAL: language directive — the article is published in this language,
+  // so all facts, titles, descriptions and quotes must be returned in this language.
+  const languageDirective = language === 'ru'
+    ? `\n\n🌐 ЯЗЫК ОТВЕТА: ВСЕ поля JSON (title, description, outcome, quotes.text, success.*, bonus_fact, timeline) ДОЛЖНЫ быть на РУССКОМ языке. Имена, названия фильмов и организаций — в их русском написании или транслитерации, как принято в русскоязычных медиа. Цитаты переводи на русский, в скобках можешь дать оригинал. Источники — оставь оригинальные названия изданий.\n`
+    : language === 'both'
+      ? `\n\n🌐 OUTPUT LANGUAGE: Russian primary. All JSON fields in Russian; quotes may include original-language version in parentheses.\n`
+      : `\n\n🌐 OUTPUT LANGUAGE: All JSON fields must be written in clear English.\n`;
+
+  return `${framingContext[framing]}${languageDirective}
 
 Research the COMPLETE life of ${celebrityName} and compile EXACTLY 10–12 specific, chronological biography facts.
 

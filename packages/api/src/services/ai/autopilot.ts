@@ -13,7 +13,8 @@ type ProgressCallback = (stage: string, progress: number, message: string) => vo
 
 export async function runAutopilot(
   articleId: string,
-  onProgress?: ProgressCallback
+  onProgress?: ProgressCallback,
+  factSources?: any
 ): Promise<{ success: boolean; error?: string }> {
   
   const emit = (stage: string, progress: number, message: string) => {
@@ -41,8 +42,9 @@ export async function runAutopilot(
       data: { currentStage: PipelineStage.RESEARCH }
     });
 
-    const { performPerplexityResearch } = await import('./perplexity-research');
-    await performPerplexityResearch(articleId, 'normal');
+    const { performMultiResearch, normalizeFactConfig } = await import('./multi-research');
+    const factConfig = normalizeFactConfig({ sources: factSources });
+    await performMultiResearch(articleId, 'normal', factConfig);
     
     emit('research', 20, 'Исследование завершено, найдены факты и цитаты');
 

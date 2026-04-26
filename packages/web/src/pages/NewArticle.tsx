@@ -4,6 +4,7 @@ import { useForm } from 'react-hook-form';
 import { Sparkles, Rocket } from 'lucide-react';
 import { api } from '../lib/api';
 import ImageSearchSettings, { ImageSearchConfig } from '../components/ImageSearchSettings';
+import FactResearchSettings, { FactResearchConfig, DEFAULT_FACT_CONFIG } from '../components/FactResearchSettings';
 
 interface FormData {
   celebrityName: string;
@@ -45,6 +46,20 @@ export default function NewArticle() {
     }
   }, [coverModel]);
 
+  // Fact research config (which AI models contribute facts)
+  const [factConfig, setFactConfig] = useState<FactResearchConfig>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('factResearchConfig') : null;
+    if (saved) {
+      try { return JSON.parse(saved); } catch { /* fall through to default */ }
+    }
+    return DEFAULT_FACT_CONFIG;
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('factResearchConfig', JSON.stringify(factConfig));
+    }
+  }, [factConfig]);
+
   const onSubmit = async (data: FormData) => {
     try {
       setLoading(true);
@@ -59,7 +74,9 @@ export default function NewArticle() {
       // Start research after a brief delay to let Socket.IO connect
       setTimeout(async () => {
         try {
-          await api.post(`/pipeline/${articleId}/research`);
+          await api.post(`/pipeline/${articleId}/research`, {
+            factSources: factConfig.sources,
+          });
         } catch (error) {
           console.error('Failed to start research:', error);
         }
@@ -93,7 +110,9 @@ export default function NewArticle() {
       // Start autopilot after a brief delay
       setTimeout(async () => {
         try {
-          await api.post(`/pipeline/${articleId}/autopilot`);
+          await api.post(`/pipeline/${articleId}/autopilot`, {
+            factSources: factConfig.sources,
+          });
         } catch (error) {
           console.error('Failed to start autopilot:', error);
         }
@@ -197,6 +216,9 @@ export default function NewArticle() {
 
         {/* Image search config (используется на этапе ресёрча и в контенте) */}
         <ImageSearchSettings config={searchConfig} onChange={setSearchConfig} />
+
+        {/* Fact research config (какие AI-модели собирают факты) */}
+        <FactResearchSettings config={factConfig} onChange={setFactConfig} />
 
         {/* Cover model selector */}
         <div className="mb-6">

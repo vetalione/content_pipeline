@@ -28,28 +28,17 @@ export const coverQueue      = new Queue('cover',      { connection, defaultJobO
 export const publishQueue    = new Queue('publish',    { connection, defaultJobOptions });
 export const autopilotQueue  = new Queue('autopilot',  { connection, defaultJobOptions });
 
-// Research Worker - using Perplexity for deep web search
+// Research Worker - multi-model orchestrator (Perplexity + GPT/Claude/Gemini)
 const researchWorker = new Worker('research', async (job) => {
-  const { articleId, mode } = job.data;
-  console.log(`Starting research for article ${articleId}, mode: ${mode || 'normal'}`);
+  const { articleId, mode, factSources } = job.data;
+  console.log(`Starting research for article ${articleId}, mode: ${mode || 'normal'}, sources:`, factSources);
   
   try {
-    // Use Perplexity for web-enabled research, fallback to OpenAI
-    const usePerplexity = !!process.env.PERPLEXITY_API_KEY;
-    
-    if (usePerplexity) {
-      console.log('Using Perplexity AI with web search');
-      const { performPerplexityResearch } = await import('./ai/perplexity-research');
-      const result = await performPerplexityResearch(articleId, mode);
-      console.log(`Perplexity research completed for article ${articleId}`);
-      return result;
-    } else {
-      console.log('Perplexity not configured, using OpenAI (no web search)');
-      const { performResearch } = await import('./ai/research');
-      const result = await performResearch(articleId);
-      console.log(`OpenAI research completed for article ${articleId}`);
-      return result;
-    }
+    const { performMultiResearch, normalizeFactConfig } = await import('./ai/multi-research');
+    const config = normalizeFactConfig({ sources: factSources });
+    const result = await performMultiResearch(articleId, mode, config);
+    console.log(`Research completed for article ${articleId}: ${result.facts.length} facts`);
+    return result;
   } catch (error) {
     console.error(`Research failed for article ${articleId}:`, error);
     throw error;
@@ -125,8 +114,8 @@ publishWorker.on('failed', (job, err) => {
 
 // Autopilot Worker - runs full pipeline automatically
 const autopilotWorker = new Worker('autopilot', async (job) => {
-  const { articleId } = job.data;
-  console.log(`🚀 Starting AUTOPILOT for article ${articleId}`);
+  const { articleId, factSources } = job.data;
+  console.log(`🚀 Starting AUTOPILOT for article ${articleId}, sources:`, factSources);
   
   try {
     const { runAutopilot } = await import('./ai/autopilot');
@@ -139,7 +128,7 @@ const autopilotWorker = new Worker('autopilot', async (job) => {
       } catch (e) {
         console.log(`Autopilot progress: ${stage} - ${progress}% - ${message}`);
       }
-    });
+    }, factSources);
     
     console.log(`✅ Autopilot completed for article ${articleId}`);
     return result;

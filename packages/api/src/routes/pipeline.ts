@@ -10,14 +10,15 @@ export const pipelineRouter = Router();
 pipelineRouter.post('/:articleId/research', async (req, res, next) => {
   try {
     const { articleId } = req.params;
-    const { action } = req.body; // 'start', 'restart', 'deep_dive'
+    const { action, factSources } = req.body; // 'start', 'restart', 'deep_dive'
     
-    console.log(`🎮 Research control for ${articleId}: ${action || 'start'}`);
+    console.log(`🎮 Research control for ${articleId}: ${action || 'start'}, sources:`, factSources);
     
     await researchQueue.add('research', {
       articleId,
       stage: PipelineStage.RESEARCH,
       mode: action === 'deep_dive' ? 'deep_dive' : action === 'restart' ? 'restart' : 'normal',
+      factSources,
     });
     
     res.json({
@@ -33,8 +34,9 @@ pipelineRouter.post('/:articleId/research', async (req, res, next) => {
 pipelineRouter.post('/:articleId/autopilot', async (req, res, next) => {
   try {
     const { articleId } = req.params;
+    const { factSources } = req.body || {};
     
-    console.log(`🚀 Starting AUTOPILOT for article ${articleId}`);
+    console.log(`🚀 Starting AUTOPILOT for article ${articleId}, sources:`, factSources);
     
     // Update article status
     await prisma.article.update({
@@ -47,7 +49,8 @@ pipelineRouter.post('/:articleId/autopilot', async (req, res, next) => {
     
     await autopilotQueue.add('autopilot', {
       articleId,
-      startedAt: new Date().toISOString()
+      startedAt: new Date().toISOString(),
+      factSources,
     });
     
     res.json({

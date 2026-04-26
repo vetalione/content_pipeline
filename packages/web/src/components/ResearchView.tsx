@@ -3,6 +3,7 @@ import { ResearchData, BiographyFact } from '@content-pipeline/shared';
 import { ExternalLink, Edit2, Trash2, Square, RotateCcw, Search, Plus } from 'lucide-react';
 import { io } from 'socket.io-client';
 import ImageSearchSettings, { ImageSearchConfig } from './ImageSearchSettings';
+import FactResearchSettings, { FactResearchConfig, DEFAULT_FACT_CONFIG } from './FactResearchSettings';
 
 interface Props {
   data: ResearchData;
@@ -65,6 +66,18 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
   useEffect(() => {
     localStorage.setItem('imageSearchConfig', JSON.stringify(searchConfig));
   }, [searchConfig]);
+
+  // Fact research config (which AI models gather facts) — shared with NewArticle
+  const [factConfig, setFactConfig] = useState<FactResearchConfig>(() => {
+    const saved = localStorage.getItem('factResearchConfig');
+    if (saved) {
+      try { return JSON.parse(saved); } catch { /* fall through */ }
+    }
+    return DEFAULT_FACT_CONFIG;
+  });
+  useEffect(() => {
+    localStorage.setItem('factResearchConfig', JSON.stringify(factConfig));
+  }, [factConfig]);
 
   // Connect to Socket.IO
   useEffect(() => {
@@ -197,7 +210,7 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
       const response = await fetch(`${API_URL}/api/pipeline/${articleId}/research`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({ action, factSources: factConfig.sources }),
       });
       
       const result = await response.json();
@@ -412,6 +425,8 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
 
       {/* Image Search Settings - FIRST THING VISIBLE */}
       <ImageSearchSettings config={searchConfig} onChange={setSearchConfig} />
+      {/* Fact Research Settings — applied on Restart / Deep Dive */}
+      <FactResearchSettings config={factConfig} onChange={setFactConfig} />
       {/* Progress Bar */}
       {progress && progress.status !== 'idle' && (
         <div className="mb-6 p-4 bg-blue-50 rounded-lg">
@@ -585,6 +600,14 @@ export default function ResearchView({ data, articleId, onUpdate }: Props) {
 
               <div className="flex justify-between items-start mb-2">
                 <h4 className="font-semibold break-words pr-20">{fact.title}</h4>
+                {(fact as any).sourceModel && (
+                  <span
+                    className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 mr-2 flex-shrink-0 uppercase tracking-wide"
+                    title="Откуда взялся факт"
+                  >
+                    {(fact as any).sourceModel}
+                  </span>
+                )}
                 <span className={`text-xs px-2 py-1 rounded flex-shrink-0 ml-2 ${
                   fact.category === 'failure' ? 'bg-red-100 text-red-700' :
                   fact.category === 'tragedy' ? 'bg-purple-100 text-purple-700' :
