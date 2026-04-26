@@ -48,24 +48,102 @@ function buildResearchPrompt(celebrityName: string, language: 'ru' | 'en' | 'bot
       ? 'Основной язык — русский. Цитаты можно дублировать в скобках на оригинале.'
       : 'All JSON fields must be in clear English.';
 
-  return `Compile 10–12 specific, chronologically ordered biographical facts about ${celebrityName} —
-focused on documented setbacks, failures, struggles, low points, and the eventual breakthrough
-that defined their public reputation.
+  return `You are compiling material for a biographical long-form piece about ${celebrityName}
+in the "Great Losers / Великие Неудачники" series. The series shows the documented
+chain of failures, humiliations, rejections, addictions, scandals, financial collapses
+and personal crises that preceded a famous person's eventual success.
 
 ${langDirective}
 
-Required structure for EACH failure:
-- Exact age and/or year of the event
-- Concrete numbers (money, durations, quantities)
-- Named people, places, companies where relevant
-- Direct quote ONLY if you are certain it is real (no fabrications)
-- Source attribution (publication / book / interview)
+═══════════════════════════════════════════════════════════════
+🎯 WHAT TO LOOK FOR — focus exclusively on these categories
+═══════════════════════════════════════════════════════════════
+
+✅ DRAMATIC FAILURES with concrete details:
+• Childhood hardship: poverty, abusive/absent parent, orphanage, bullying
+• School: expulsion, dropout, social rejection, learning struggles
+• Early career: rejections (named person who said no, how many times),
+  failed auditions/pitches/businesses, humiliating first jobs
+• Financial: bankruptcy with figures, exact debt amounts, lowest bank balance,
+  homelessness, sleeping in car/couch, foreclosures
+• Personal: divorces with public fallout, custody losses, estranged family,
+  addictions (specific substances + clinic stays), mental health crises,
+  suicide attempts, deaths of close ones and impact on career
+• Public scandals: arrests, lawsuits, prison time (exact days/months),
+  fired from major project, cancelled, blacklisted
+• Mid-career collapses: critically panned project (review scores, box office),
+  feuds with studio/label/partner, comeback that flopped
+• Health: serious illness, accidents, near-death
+
+❌ DO NOT include vague phrases like "faced challenges" or "overcame obstacles"
+❌ DO NOT include generic praise or career highlights — that goes in "success" only
+❌ DO NOT pad with non-dramatic biographical filler
+
+═══════════════════════════════════════════════════════════════
+📚 SOURCE QUALITY — search across ALL of these in your knowledge:
+═══════════════════════════════════════════════════════════════
+
+For maximum coverage, draw from these source TYPES (not just Wikipedia):
+• Authorized & unauthorized biographies (full book titles + authors)
+• Subject's own autobiography / memoir (page references if known)
+• Long-form profile pieces: New Yorker, Vanity Fair, Rolling Stone,
+  Guardian Long Read, Esquire, GQ, Atlantic, NYT Magazine
+• Major interview transcripts: Howard Stern, Joe Rogan, Hot Ones,
+  Marc Maron WTF, Fresh Air NPR, Charlie Rose, 60 Minutes,
+  Jimmy Kimmel, Letterman, Oprah's Master Class
+• Documentary films & series featuring the subject
+• Court records, bankruptcy filings, divorce filings (publicly available)
+• Industry trade press: Variety, Hollywood Reporter, Billboard, Deadline
+• Russian-language sources where applicable: Коммерсантъ, Forbes Russia,
+  Афиша, Esquire Russia, RBK, Lenta.ru, interviews on YouTube
+  (Дудь, Собчак, Ирина Шихман, Гордеева, Осторожно, Собчак)
+• Behind-the-scenes accounts from co-stars, ex-managers, ex-spouses
+• Podcast deep-dives: Behind the Bastards, You Must Remember This,
+  The Dollop, Last Podcast on the Left
+
+Search MEMORY across all of these — do not stop at the first 3 facts you recall.
+
+═══════════════════════════════════════════════════════════════
+🗓️ STRUCTURE — must cover these life phases (at least 1 fact each)
+═══════════════════════════════════════════════════════════════
+
+1. CHILDHOOD (ages 5–15): family situation, hardship, school
+2. EARLY ATTEMPTS (ages 15–22): first jobs, dropouts, first failures
+3. STRUGGLE YEARS (ages 22–30): rejections, debts, what kept them going
+4. PERSONAL CRISES (any age): relationships, addictions, mental health
+5. CAREER SETBACKS (ages 30+): public flops, scandals, comebacks-that-failed
+6. TURNING POINT: the specific person/film/album/decision that changed it
+
+If you don't have a fact for a phase, leave that gap — DO NOT invent.
+Better 6 verified facts than 12 with fabrications.
+
+═══════════════════════════════════════════════════════════════
+📋 OUTPUT REQUIREMENTS for EACH fact
+═══════════════════════════════════════════════════════════════
+
+- Exact age AND/OR year (numeric)
+- Concrete figures: dollar amounts, durations, quantities, dates
+- Named people, places, companies where applicable
+- Direct quote ONLY if you are 100% certain it is real and verbatim
+- Source attribution: book title / publication / show name + date
+
+═══════════════════════════════════════════════════════════════
+🛑 ANTI-FABRICATION RULES (critical)
+═══════════════════════════════════════════════════════════════
+
+• If uncertain about a number, use a range or omit it. Don't guess.
+• Never transfer a fact from another celebrity (e.g. don't borrow
+  Chaplin's lookalike-contest story for an unrelated person).
+• If a quote is paraphrased in your memory, set quotes[].text = "" and
+  describe what they said in context.
+• If you cannot find a fact for a category, return an empty array
+  for that category rather than padding.
 
 Output ONLY valid JSON in this exact shape, no prose before or after:
 
 {
   "teaser": {
-    "known_for": "What they are publicly famous for",
+    "known_for": "What they are publicly famous for (3-4 achievements with figures)",
     "hidden_drama": "The contrast — the struggle behind the fame"
   },
   "failures": [
@@ -74,6 +152,7 @@ Output ONLY valid JSON in this exact shape, no prose before or after:
       "title": "Short punchy headline with a specific detail (4-10 words)",
       "age": "exact age at the time, e.g. '14' or 'age 22'",
       "year": "exact year, e.g. '1997'",
+      "phase": "childhood | early_attempts | struggle | personal_crisis | career_setback | turning_point",
       "description": "Detailed account with figures, names, places (3-5 sentences)",
       "outcome": "What happened next / how this led somewhere",
       "severity": 4,
@@ -85,7 +164,7 @@ Output ONLY valid JSON in this exact shape, no prose before or after:
     {
       "text": "EXACT quote (not a paraphrase) — leave empty if uncertain",
       "context": "When and why they said it",
-      "source": "Where the quote is from",
+      "source": "Where the quote is from (book/interview/show + date)",
       "suitable_for_ending": true
     }
   ],
@@ -127,7 +206,7 @@ async function researchWithGPT(celebrityName: string, language: 'ru' | 'en' | 'b
         { role: 'user', content: buildResearchPrompt(celebrityName, language) },
       ],
       temperature: 0.3,
-      max_tokens: 8000,
+      max_tokens: 12000,
       response_format: { type: 'json_object' },
     }),
     new Promise<never>((_, reject) =>
@@ -146,7 +225,7 @@ async function researchWithClaude(celebrityName: string, language: 'ru' | 'en' |
   const message = await Promise.race([
     anthropic.messages.create({
       model: 'claude-sonnet-4-20250514',
-      max_tokens: 8000,
+      max_tokens: 12000,
       system:
         'You are a senior biographical research consultant. You produce well-sourced, fact-checked biographical material. You NEVER fabricate quotes, dates, or events. When uncertain, you omit the field. Output ONLY valid JSON, no prose, no markdown fences.',
       messages: [{ role: 'user', content: buildResearchPrompt(celebrityName, language) }],
@@ -187,7 +266,7 @@ async function researchWithGemini(celebrityName: string, language: 'ru' | 'en' |
       ],
       config: {
         temperature: 0.3,
-        maxOutputTokens: 8000,
+        maxOutputTokens: 12000,
         responseMimeType: 'application/json',
       },
     }),
