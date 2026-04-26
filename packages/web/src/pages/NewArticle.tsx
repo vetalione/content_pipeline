@@ -14,12 +14,13 @@ export default function NewArticle() {
   const [loading, setLoading] = useState(false);
   const [autopilotLoading, setAutopilotLoading] = useState(false);
   const [language, setLanguage] = useState<'ru' | 'en' | 'both'>('ru');
+  const [articleStyle, setArticleStyle] = useState<'basic' | 'rasplata'>('basic');
 
   const onSubmit = async (data: FormData) => {
     try {
       setLoading(true);
-      // include language selection
-      const payload = { ...data, language };
+      // include language and style selection
+      const payload = { ...data, language, articleStyle };
       const response = await api.post('/articles', payload);
       const articleId = response.data.data.id;
       
@@ -53,7 +54,7 @@ export default function NewArticle() {
       setAutopilotLoading(true);
       
       // Create article
-      const payload = { celebrityName, language };
+      const payload = { celebrityName, language, articleStyle };
       const response = await api.post('/articles', payload);
       const articleId = response.data.data.id;
       
@@ -98,6 +99,53 @@ export default function NewArticle() {
             <label className="inline-flex items-center gap-2">
               <input type="radio" name="language" value="both" checked={language === 'both'} onChange={() => setLanguage('both')} />
               Рус & Eng
+            </label>
+          </div>
+        </div>
+        <div className="mb-6">
+          <label className="block text-sm font-medium mb-2">Стиль повествования</label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label
+              className={`flex flex-col gap-1 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                articleStyle === 'basic'
+                  ? 'border-primary bg-blue-50'
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="articleStyle"
+                  value="basic"
+                  checked={articleStyle === 'basic'}
+                  onChange={() => setArticleStyle('basic')}
+                />
+                <span className="font-semibold">Базовый</span>
+              </div>
+              <p className="text-xs text-gray-600 ml-6">
+                Лёгкая ирония, короткие предложения, дружеский рассказ. Текущий стиль канала.
+              </p>
+            </label>
+            <label
+              className={`flex flex-col gap-1 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                articleStyle === 'rasplata'
+                  ? 'border-primary bg-blue-50'
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="articleStyle"
+                  value="rasplata"
+                  checked={articleStyle === 'rasplata'}
+                  onChange={() => setArticleStyle('rasplata')}
+                />
+                <span className="font-semibold">Расплата героя</span>
+              </div>
+              <p className="text-xs text-gray-600 ml-6">
+                Глубже, драматургичнее. Драматическая ирония, форшедоуинг, ABT, голос-А/Б, ритм-контраст.
+              </p>
             </label>
           </div>
         </div>

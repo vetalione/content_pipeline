@@ -77,7 +77,7 @@ articlesRouter.get('/:id', async (req, res, next) => {
 // Create new article
 articlesRouter.post('/', async (req, res, next) => {
   try {
-    const { celebrityName, language } = req.body;
+    const { celebrityName, language, articleStyle } = req.body;
     
     if (!celebrityName) {
       return res.status(400).json({
@@ -86,12 +86,16 @@ articlesRouter.post('/', async (req, res, next) => {
       });
     }
     
+    const allowedStyles = ['basic', 'rasplata'];
+    const style = allowedStyles.includes(articleStyle) ? articleStyle : 'basic';
+
     const article = await prisma.article.create({
       data: {
         celebrityName,
         status: ArticleStatus.DRAFT,
         currentStage: PipelineStage.INPUT,
-        language: language || 'ru'
+        language: language || 'ru',
+        articleStyle: style
       }
     });
     
