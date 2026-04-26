@@ -1,8 +1,9 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useForm } from 'react-hook-form';
 import { Sparkles, Rocket } from 'lucide-react';
 import { api } from '../lib/api';
+import ImageSearchSettings, { ImageSearchConfig } from '../components/ImageSearchSettings';
 
 interface FormData {
   celebrityName: string;
@@ -15,6 +16,34 @@ export default function NewArticle() {
   const [autopilotLoading, setAutopilotLoading] = useState(false);
   const [language, setLanguage] = useState<'ru' | 'en' | 'both'>('ru');
   const [articleStyle, setArticleStyle] = useState<'basic' | 'rasplata'>('basic');
+
+  // Image search config (shared via localStorage with ResearchView/ContentView)
+  const [searchConfig, setSearchConfig] = useState<ImageSearchConfig>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('imageSearchConfig') : null;
+    return saved
+      ? JSON.parse(saved)
+      : {
+          sources: { google: true, brave: true, perplexity: true, openai: false },
+          confidenceThreshold: 85,
+          resultsPerSource: 5,
+        };
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('imageSearchConfig', JSON.stringify(searchConfig));
+    }
+  }, [searchConfig]);
+
+  // Cover model (shared via localStorage with CoverView)
+  const [coverModel, setCoverModel] = useState<'gemini' | 'openai'>(() => {
+    const saved = typeof window !== 'undefined' ? localStorage.getItem('coverModel') : null;
+    return saved === 'openai' ? 'openai' : 'gemini';
+  });
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('coverModel', coverModel);
+    }
+  }, [coverModel]);
 
   const onSubmit = async (data: FormData) => {
     try {
@@ -164,6 +193,58 @@ export default function NewArticle() {
           {errors.celebrityName && (
             <p className="text-red-500 text-sm mt-1">{errors.celebrityName.message}</p>
           )}
+        </div>
+
+        {/* Image search config (используется на этапе ресёрча и в контенте) */}
+        <ImageSearchSettings config={searchConfig} onChange={setSearchConfig} />
+
+        {/* Cover model selector */}
+        <div className="mb-6">
+          <label className="block text-sm font-medium mb-2">Модель для обложки</label>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <label
+              className={`flex flex-col gap-1 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                coverModel === 'gemini'
+                  ? 'border-primary bg-blue-50'
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="coverModel"
+                  value="gemini"
+                  checked={coverModel === 'gemini'}
+                  onChange={() => setCoverModel('gemini')}
+                />
+                <span className="font-semibold">🍌 Nano Banana (Gemini)</span>
+              </div>
+              <p className="text-xs text-gray-600 ml-6">
+                Быстрее и дешевле. Оптимально для большинства обложек.
+              </p>
+            </label>
+            <label
+              className={`flex flex-col gap-1 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                coverModel === 'openai'
+                  ? 'border-primary bg-blue-50'
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="coverModel"
+                  value="openai"
+                  checked={coverModel === 'openai'}
+                  onChange={() => setCoverModel('openai')}
+                />
+                <span className="font-semibold">🎨 GPT Image (OpenAI)</span>
+              </div>
+              <p className="text-xs text-gray-600 ml-6">
+                Дороже и медленнее, но часто более выразительный результат.
+              </p>
+            </label>
+          </div>
         </div>
 
         <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-6">
