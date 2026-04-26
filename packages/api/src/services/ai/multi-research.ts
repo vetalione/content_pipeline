@@ -1,27 +1,29 @@
 /**
  * Multi-model fact research orchestrator.
  *
- * Runs Perplexity (web search) AND optional GPT/Claude/Gemini (parametric)
- * in parallel, merges all facts into one combined ResearchData blob,
- * tagging each fact with its source model so the user can see provenance.
+ * Runs Perplexity AND optional GPT / Claude / Gemini IN PARALLEL, all
+ * doing the SAME job: searching the web for biographical failures.
+ * Each model uses the IDENTICAL prompt that Perplexity uses
+ * (`createDeepResearchPrompt`) and has its provider's native web-search
+ * tool enabled — so they are interchangeable redundant searchers.
  *
- * Why three direct-LLM models on top of Perplexity:
- * - Perplexity excels at fresh web evidence + citations
- * - GPT-4o, Claude, Gemini have different training cuts and complementary
- *   recall — between them they catch facts Perplexity's web crawl missed
- * - User-driven curation: more raw material → more interesting article
+ * Why duplicate the work:
+ * - Different search indexes (Perplexity's, OpenAI's, Google's, Anthropic's
+ *   Brave-based crawler) surface different sources for the same query
+ * - Fault tolerance: if one provider fails, others still produce material
+ * - More raw facts → user picks the strongest 8–12 in the curation step
  *
- * Each non-Perplexity model returns the SAME JSON shape Perplexity does, so
- * the existing `convertToResearchData` logic can absorb them with a tiny
- * post-processing step (sourceModel tagging).
+ * Each model returns the SAME JSON shape Perplexity does, so the existing
+ * `convertToResearchData` logic absorbs them with a tiny post-processing
+ * step (sourceModel tagging).
  */
 
-import OpenAI from 'openai';
 import Anthropic from '@anthropic-ai/sdk';
 import { GoogleGenAI } from '@google/genai';
 import { prisma } from '../../lib/db';
-import { PipelineStage, ResearchData, BiographyFact } from '@content-pipeline/shared';
-import { emitResearchProgress, emitResearchComplete, emitResearchError } from '../../lib/socket';
+import { ResearchData, BiographyFact, PipelineStage } from '@content-pipeline/shared';
+import { emitResearchProgress, emitResearchComplete } from '../../lib/socket';
+import { createDeepResearchPrompt } from './perplexity-research';
 
 export type FactSource = 'perplexity' | 'gpt' | 'claude' | 'gemini';
 
@@ -33,155 +35,18 @@ const DEFAULT_CONFIG: FactResearchConfig = {
   sources: { perplexity: true, gpt: false, claude: false, gemini: false },
 };
 
-/**
- * Build a compact research prompt that any model can answer with the same
- * JSON shape. This is intentionally simpler than the Perplexity prompt
- * (no framing variants, no thin-response retry) because the secondary
- * models are supplementary and only need to produce CONTRIBUTING facts —
- * Perplexity (or whichever model is primary) already covered the
- * baseline.
- */
-function buildResearchPrompt(celebrityName: string, language: 'ru' | 'en' | 'both'): string {
-  const langDirective = language === 'ru'
-    ? 'ВСЕ поля JSON должны быть на русском языке (включая заголовки, описания, цитаты).'
-    : language === 'both'
-      ? 'Основной язык — русский. Цитаты можно дублировать в скобках на оригинале.'
-      : 'All JSON fields must be in clear English.';
-
-  return `You are compiling material for a biographical long-form piece about ${celebrityName}
-in the "Great Losers / Великие Неудачники" series. The series shows the documented
-chain of failures, humiliations, rejections, addictions, scandals, financial collapses
-and personal crises that preceded a famous person's eventual success.
-
-${langDirective}
-
-═══════════════════════════════════════════════════════════════
-🎯 WHAT TO LOOK FOR — focus exclusively on these categories
-═══════════════════════════════════════════════════════════════
-
-✅ DRAMATIC FAILURES with concrete details:
-• Childhood hardship: poverty, abusive/absent parent, orphanage, bullying
-• School: expulsion, dropout, social rejection, learning struggles
-• Early career: rejections (named person who said no, how many times),
-  failed auditions/pitches/businesses, humiliating first jobs
-• Financial: bankruptcy with figures, exact debt amounts, lowest bank balance,
-  homelessness, sleeping in car/couch, foreclosures
-• Personal: divorces with public fallout, custody losses, estranged family,
-  addictions (specific substances + clinic stays), mental health crises,
-  suicide attempts, deaths of close ones and impact on career
-• Public scandals: arrests, lawsuits, prison time (exact days/months),
-  fired from major project, cancelled, blacklisted
-• Mid-career collapses: critically panned project (review scores, box office),
-  feuds with studio/label/partner, comeback that flopped
-• Health: serious illness, accidents, near-death
-
-❌ DO NOT include vague phrases like "faced challenges" or "overcame obstacles"
-❌ DO NOT include generic praise or career highlights — that goes in "success" only
-❌ DO NOT pad with non-dramatic biographical filler
-
-═══════════════════════════════════════════════════════════════
-📚 SOURCE QUALITY — search across ALL of these in your knowledge:
-═══════════════════════════════════════════════════════════════
-
-For maximum coverage, draw from these source TYPES (not just Wikipedia):
-• Authorized & unauthorized biographies (full book titles + authors)
-• Subject's own autobiography / memoir (page references if known)
-• Long-form profile pieces: New Yorker, Vanity Fair, Rolling Stone,
-  Guardian Long Read, Esquire, GQ, Atlantic, NYT Magazine
-• Major interview transcripts: Howard Stern, Joe Rogan, Hot Ones,
-  Marc Maron WTF, Fresh Air NPR, Charlie Rose, 60 Minutes,
-  Jimmy Kimmel, Letterman, Oprah's Master Class
-• Documentary films & series featuring the subject
-• Court records, bankruptcy filings, divorce filings (publicly available)
-• Industry trade press: Variety, Hollywood Reporter, Billboard, Deadline
-• Russian-language sources where applicable: Коммерсантъ, Forbes Russia,
-  Афиша, Esquire Russia, RBK, Lenta.ru, interviews on YouTube
-  (Дудь, Собчак, Ирина Шихман, Гордеева, Осторожно, Собчак)
-• Behind-the-scenes accounts from co-stars, ex-managers, ex-spouses
-• Podcast deep-dives: Behind the Bastards, You Must Remember This,
-  The Dollop, Last Podcast on the Left
-
-Search MEMORY across all of these — do not stop at the first 3 facts you recall.
-
-═══════════════════════════════════════════════════════════════
-🗓️ STRUCTURE — must cover these life phases (at least 1 fact each)
-═══════════════════════════════════════════════════════════════
-
-1. CHILDHOOD (ages 5–15): family situation, hardship, school
-2. EARLY ATTEMPTS (ages 15–22): first jobs, dropouts, first failures
-3. STRUGGLE YEARS (ages 22–30): rejections, debts, what kept them going
-4. PERSONAL CRISES (any age): relationships, addictions, mental health
-5. CAREER SETBACKS (ages 30+): public flops, scandals, comebacks-that-failed
-6. TURNING POINT: the specific person/film/album/decision that changed it
-
-If you don't have a fact for a phase, leave that gap — DO NOT invent.
-Better 6 verified facts than 12 with fabrications.
-
-═══════════════════════════════════════════════════════════════
-📋 OUTPUT REQUIREMENTS for EACH fact
-═══════════════════════════════════════════════════════════════
-
-- Exact age AND/OR year (numeric)
-- Concrete figures: dollar amounts, durations, quantities, dates
-- Named people, places, companies where applicable
-- Direct quote ONLY if you are 100% certain it is real and verbatim
-- Source attribution: book title / publication / show name + date
-
-═══════════════════════════════════════════════════════════════
-🛑 ANTI-FABRICATION RULES (critical)
-═══════════════════════════════════════════════════════════════
-
-• If uncertain about a number, use a range or omit it. Don't guess.
-• Never transfer a fact from another celebrity (e.g. don't borrow
-  Chaplin's lookalike-contest story for an unrelated person).
-• If a quote is paraphrased in your memory, set quotes[].text = "" and
-  describe what they said in context.
-• If you cannot find a fact for a category, return an empty array
-  for that category rather than padding.
-
-Output ONLY valid JSON in this exact shape, no prose before or after:
-
-{
-  "teaser": {
-    "known_for": "What they are publicly famous for (3-4 achievements with figures)",
-    "hidden_drama": "The contrast — the struggle behind the fame"
-  },
-  "failures": [
-    {
-      "number": 1,
-      "title": "Short punchy headline with a specific detail (4-10 words)",
-      "age": "exact age at the time, e.g. '14' or 'age 22'",
-      "year": "exact year, e.g. '1997'",
-      "phase": "childhood | early_attempts | struggle | personal_crisis | career_setback | turning_point",
-      "description": "Detailed account with figures, names, places (3-5 sentences)",
-      "outcome": "What happened next / how this led somewhere",
-      "severity": 4,
-      "source": "Specific source: book / article / interview + publication + date",
-      "visual_suggestion": "Photo description showing ${celebrityName} in this period"
-    }
-  ],
-  "quotes": [
-    {
-      "text": "EXACT quote (not a paraphrase) — leave empty if uncertain",
-      "context": "When and why they said it",
-      "source": "Where the quote is from (book/interview/show + date)",
-      "suitable_for_ending": true
-    }
-  ],
-  "success": {
-    "peak_achievement": "Top achievement with figures",
-    "current_status": "Where they are now",
-    "wealth": "Net worth / income with figures",
-    "awards": ["awards with years"],
-    "personal_life": "Family, children if public"
-  },
-  "bonus_fact": "One genuinely interesting little-known fact — ONLY if you are certain it is real, otherwise null",
-  "sources": ["full list of sources used"]
-}
-
-CRITICAL: Do not invent facts. If you do not know something, omit the field or set it to null.
-Do not embellish. Do not transfer facts from other celebrities. Concrete numbers must be exact.`;
-}
+/* ─────────────────────────────────────────────────────────────────────
+ * Shared prompt
+ *
+ * All four models (Perplexity, GPT, Claude, Gemini) use the EXACT same
+ * prompt — `createDeepResearchPrompt` imported from perplexity-research.
+ * The secondary models are intentionally redundant duplicates of
+ * Perplexity, hitting the same task with different web-search backends,
+ * so we maximise coverage and fault tolerance.
+ *
+ * Each provider has its native web-search tool enabled below so they
+ * actually search the live web (not just rely on training memory).
+ * ───────────────────────────────────────────────────────────────────── */
 
 /* ─────────────────────────────────────────────────────────────────────
  * Per-model callers
@@ -189,53 +54,12 @@ Do not embellish. Do not transfer facts from other celebrities. Concrete numbers
  * or throws.
  * ───────────────────────────────────────────────────────────────────── */
 
-async function researchWithGPT(celebrityName: string, language: 'ru' | 'en' | 'both'): Promise<any> {
-  if (!process.env.OPENAI_API_KEY) throw new Error('OPENAI_API_KEY not configured');
-  const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
-  console.log(`  🧠 GPT-4o researching ${celebrityName}...`);
-  const completion = await Promise.race([
-    openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content:
-            'You are a senior biographical research consultant. You produce well-sourced, fact-checked biographical material. You never fabricate quotes, dates, or events. When uncertain, you omit the field.',
-        },
-        { role: 'user', content: buildResearchPrompt(celebrityName, language) },
-      ],
-      temperature: 0.3,
-      max_tokens: 12000,
-      response_format: { type: 'json_object' },
-    }),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('GPT timeout after 3 minutes')), 180000)
-    ),
-  ]);
-  const content = completion.choices[0]?.message?.content || '{}';
-  return JSON.parse(content);
-}
-
-async function researchWithClaude(celebrityName: string, language: 'ru' | 'en' | 'both'): Promise<any> {
-  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
-  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-
-  console.log(`  🤖 Claude Sonnet researching ${celebrityName}...`);
-  const message = await Promise.race([
-    anthropic.messages.create({
-      model: 'claude-sonnet-4-20250514',
-      max_tokens: 12000,
-      system:
-        'You are a senior biographical research consultant. You produce well-sourced, fact-checked biographical material. You NEVER fabricate quotes, dates, or events. When uncertain, you omit the field. Output ONLY valid JSON, no prose, no markdown fences.',
-      messages: [{ role: 'user', content: buildResearchPrompt(celebrityName, language) }],
-    }),
-    new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Claude timeout after 3 minutes')), 180000)
-    ),
-  ]);
-  const text = message.content[0]?.type === 'text' ? message.content[0].text : '';
-  // Strip possible markdown fences
+/**
+ * Extract a JSON object from a free-form model response.
+ * Handles markdown fences and surrounding prose (common when web_search
+ * tools are enabled and the model adds citation prefaces).
+ */
+function extractJsonBlock(text: string): any {
   let json = text.trim();
   if (json.startsWith('```json')) json = json.replace(/^```json\s*/, '').replace(/```\s*$/, '');
   else if (json.startsWith('```')) json = json.replace(/^```\s*/, '').replace(/```\s*$/, '');
@@ -244,22 +68,126 @@ async function researchWithClaude(celebrityName: string, language: 'ru' | 'en' |
   return JSON.parse(json);
 }
 
+/**
+ * GPT via OpenAI Responses API with the native `web_search` tool.
+ * We use raw fetch (same pattern as openai-images.ts) because the v4
+ * SDK pinned in this repo predates the Responses API.
+ */
+async function researchWithGPT(celebrityName: string, language: 'ru' | 'en' | 'both'): Promise<any> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) throw new Error('OPENAI_API_KEY not configured');
+
+  console.log(`  🧠 GPT-5 (web_search) researching ${celebrityName}...`);
+
+  const userPrompt = createDeepResearchPrompt(celebrityName, 'documentary', language);
+  const systemPrompt =
+    'You are a senior biographical research consultant. Use the web_search tool aggressively to find authoritative sources (biographies, interview transcripts, court records, long-form journalism). You NEVER fabricate quotes, dates, or events. When uncertain, omit the field. Output ONLY valid JSON matching the schema requested by the user — no prose, no markdown fences.';
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 180_000);
+
+  let response: Response;
+  try {
+    response = await fetch('https://api.openai.com/v1/responses', {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-5',
+        tools: [{ type: 'web_search' }],
+        tool_choice: 'auto',
+        input: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+      }),
+      signal: controller.signal,
+    });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+
+  if (!response.ok) {
+    const errText = await response.text().catch(() => '');
+    throw new Error(`OpenAI Responses API ${response.status}: ${errText.substring(0, 300)}`);
+  }
+
+  const data: any = await response.json();
+  let fullText = '';
+  if (typeof data?.output_text === 'string') {
+    fullText = data.output_text;
+  } else if (Array.isArray(data?.output)) {
+    for (const item of data.output) {
+      const contents = item?.content;
+      if (Array.isArray(contents)) {
+        for (const c of contents) {
+          if (typeof c?.text === 'string') fullText += c.text + '\n';
+        }
+      }
+    }
+  }
+  if (!fullText.trim()) throw new Error('GPT returned empty response');
+  return extractJsonBlock(fullText);
+}
+
+/**
+ * Claude with the native `web_search_20260209` tool (dynamic filtering
+ * via code execution). $10 per 1000 searches + token cost.
+ */
+async function researchWithClaude(celebrityName: string, language: 'ru' | 'en' | 'both'): Promise<any> {
+  if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
+  const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
+
+  console.log(`  🤖 Claude Sonnet 4.5 (web_search) researching ${celebrityName}...`);
+  const message = await Promise.race([
+    anthropic.messages.create({
+      model: 'claude-sonnet-4-5',
+      max_tokens: 12000,
+      system:
+        'You are a senior biographical research consultant. Use the web_search tool aggressively to find authoritative sources (biographies, interview transcripts, court records, long-form journalism). You NEVER fabricate quotes, dates, or events. When uncertain, omit the field. Output ONLY valid JSON matching the schema requested by the user, no prose before or after, no markdown fences.',
+      messages: [{ role: 'user', content: createDeepResearchPrompt(celebrityName, 'documentary', language) }],
+      tools: [{ type: 'web_search_20250305', name: 'web_search', max_uses: 8 } as any],
+    }),
+    new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Claude timeout after 3 minutes')), 180_000)
+    ),
+  ]);
+
+  // With tools enabled, the response can have multiple text blocks
+  // interleaved with server_tool_use / web_search_tool_result blocks.
+  // The final assistant text holds the JSON.
+  let combined = '';
+  for (const block of (message as any).content || []) {
+    if (block?.type === 'text' && typeof block.text === 'string') combined += block.text + '\n';
+  }
+  if (!combined.trim()) throw new Error('Claude returned empty response');
+  return extractJsonBlock(combined);
+}
+
+/**
+ * Gemini with the `google_search` grounding tool.
+ * Note: when grounding is enabled, `responseMimeType: application/json`
+ * cannot be used (mutually exclusive in the API), so we rely on the
+ * prompt's "JSON only" instruction and parse defensively.
+ */
 async function researchWithGemini(celebrityName: string, language: 'ru' | 'en' | 'both'): Promise<any> {
   if (!process.env.GEMINI_API_KEY) throw new Error('GEMINI_API_KEY not configured');
   const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
-  console.log(`  💎 Gemini researching ${celebrityName}...`);
+  console.log(`  💎 Gemini 3 Flash (google_search) researching ${celebrityName}...`);
   const result = await Promise.race([
     ai.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3-flash-preview',
       contents: [
         {
           role: 'user',
           parts: [
             {
               text:
-                'You are a senior biographical research consultant. You never fabricate quotes, dates, or events. Output ONLY valid JSON.\n\n' +
-                buildResearchPrompt(celebrityName, language),
+                'You are a senior biographical research consultant. Use the google_search tool aggressively to find authoritative sources (biographies, interview transcripts, court records, long-form journalism). You NEVER fabricate quotes, dates, or events. When uncertain, omit the field. Output ONLY valid JSON matching the schema below — no prose, no markdown fences.\n\n' +
+                createDeepResearchPrompt(celebrityName, 'documentary', language),
             },
           ],
         },
@@ -267,27 +195,25 @@ async function researchWithGemini(celebrityName: string, language: 'ru' | 'en' |
       config: {
         temperature: 0.3,
         maxOutputTokens: 12000,
-        responseMimeType: 'application/json',
+        tools: [{ googleSearch: {} } as any],
       },
     }),
     new Promise<never>((_, reject) =>
-      setTimeout(() => reject(new Error('Gemini timeout after 3 minutes')), 180000)
+      setTimeout(() => reject(new Error('Gemini timeout after 3 minutes')), 180_000)
     ),
   ]);
-  const text = (result as any)?.text || (result as any)?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
-  let json = text.trim();
-  if (json.startsWith('```json')) json = json.replace(/^```json\s*/, '').replace(/```\s*$/, '');
-  else if (json.startsWith('```')) json = json.replace(/^```\s*/, '').replace(/```\s*$/, '');
-  const match = json.match(/\{[\s\S]*\}/);
-  if (match) json = match[0];
-  return JSON.parse(json);
+  const text =
+    (result as any)?.text ||
+    (result as any)?.candidates?.[0]?.content?.parts?.map((p: any) => p?.text).filter(Boolean).join('\n') ||
+    '';
+  if (!text.trim()) throw new Error('Gemini returned empty response');
+  return extractJsonBlock(text);
 }
 
 /* ─────────────────────────────────────────────────────────────────────
  * Conversion: rawData → BiographyFact[]
  * Same logic as in perplexity-research.ts but tags each fact with source.
  * ───────────────────────────────────────────────────────────────────── */
-
 function rawToFacts(rawData: any, sourceModel: FactSource, idPrefix: string): {
   facts: BiographyFact[];
   quotes: any[];

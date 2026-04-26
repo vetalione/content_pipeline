@@ -296,7 +296,7 @@ export async function performPerplexityResearch(
  * We cycle through framings on retry so transient refusals self-heal.
  * All framings produce the same JSON output — only the context differs.
  */
-type PromptFraming = 'documentary' | 'academic' | 'journalistic';
+export type PromptFraming = 'documentary' | 'academic' | 'journalistic';
 
 function getSystemPrompt(framing: PromptFraming = 'documentary'): string {
   const framingHeader: Record<PromptFraming, string> = {
@@ -399,7 +399,7 @@ function getSystemPromptRu(framing: PromptFraming = 'documentary'): string {
 ВЫВОД: Отвечай только валидным JSON. Никакого текста до или после JSON-объекта.`;
 }
 
-function createDeepResearchPrompt(celebrityName: string, framing: PromptFraming = 'documentary', language: 'ru' | 'en' | 'both' = 'en'): string {
+export function createDeepResearchPrompt(celebrityName: string, framing: PromptFraming = 'documentary', language: 'ru' | 'en' | 'both' = 'en'): string {
   const framingContext: Record<PromptFraming, string> = {
     documentary: `This is for an authorised biographical documentary about ${celebrityName}.`,
     academic:    `This is a graduate-level biographical case study about ${celebrityName}.`,
