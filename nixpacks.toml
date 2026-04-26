@@ -19,4 +19,6 @@ cmds = [
 ]
 
 [start]
-cmd = "npm run start --workspace=packages/api"
+# Apply any pending Prisma migrations against production DB before booting.
+# `migrate deploy` is the production-safe command (no schema diffing, no prompts).
+cmd = "npx prisma@5.22.0 migrate deploy --schema=packages/api/prisma/schema.prisma && npm run start --workspace=packages/api"
