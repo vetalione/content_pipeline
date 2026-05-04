@@ -737,6 +737,13 @@ async function saveArticleRequest(
   const title = payload[2] || '';
   const meta = payload[3]; // empty string for drafts, object for published
 
+  // Diagnostic: dump full payload[3] so we can see what VK actually returns.
+  // VK's article API changed in 2026 — meta shape may differ from past observations.
+  const metaPreview = typeof meta === 'object'
+    ? JSON.stringify(meta).substring(0, 400)
+    : `(${typeof meta}) ${JSON.stringify(meta)}`;
+  console.log(`   📊 save response: articleId=${articleId} isPublished=${params.isPublished} meta=${metaPreview}`);
+
   // Validate that articleId is a number, not a base64 string
   if (typeof articleId !== 'number') {
     throw new Error(
@@ -861,6 +868,34 @@ export async function publishVkArticle(
   // 9. Build article URL
   const articleUrl =
     publishResult.url || `https://vk.com/@${await getGroupScreenName()}-${slug}`;
+
+  if (!publishResult.url) {
+    console.warn(
+      `   ⚠️ VK did not return article URL — falling back to slug-based guess. ` +
+        `If the URL 404s, the article likely saved as a draft instead of published.`
+    );
+  }
+
+  // Verify the article URL is actually reachable (not 404).
+  // Done with a single HEAD request — cheap and tells us if publish step really worked.
+  try {
+    const verifyRes = await fetch(articleUrl, {
+      method: 'HEAD',
+      headers: { 'User-Agent': USER_AGENT, Cookie: cookieHeader },
+      redirect: 'follow',
+    });
+    if (!verifyRes.ok) {
+      console.warn(
+        `   ⚠️ VK Article URL returned HTTP ${verifyRes.status} on verification: ${articleUrl}\n` +
+          `      Article was probably created as a DRAFT (only visible to you in vk.com/dev/articles).\n` +
+          `      Saved articleId on VK side: ${articleId}`
+      );
+    } else {
+      console.log(`   🔎 Verify OK (HTTP ${verifyRes.status}) — article URL is reachable`);
+    }
+  } catch (err: any) {
+    console.warn(`   ⚠️ URL verification failed (network): ${err.message}`);
+  }
 
   console.log(`   ✅ VK Article published: ${articleUrl}`);
   return { url: articleUrl };
