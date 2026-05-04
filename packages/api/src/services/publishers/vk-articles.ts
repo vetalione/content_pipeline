@@ -56,6 +56,7 @@ interface VkSaveResponse {
   articleId: number;
   title: string;
   url?: string;
+  vkSlug?: string;
 }
 
 // ── Cookie Management ──────────────────────────────────────────────────────────
@@ -753,11 +754,13 @@ async function saveArticleRequest(
   }
 
   let url: string | undefined;
-  if (meta && typeof meta === 'object' && meta.url) {
-    url = `https://vk.com${meta.url}`;
+  let vkSlug: string | undefined;
+  if (meta && typeof meta === 'object') {
+    if (meta.url) url = `https://vk.com${meta.url}`;
+    if (typeof meta.name === 'string' && meta.name.length > 0) vkSlug = meta.name;
   }
 
-  return { articleId, title, url };
+  return { articleId, title, url, vkSlug };
 }
 
 // ── Main Entry Point ───────────────────────────────────────────────────────────
@@ -866,37 +869,56 @@ export async function publishVkArticle(
   });
 
   // 9. Build article URL
+  // VK returns its own slug in meta.name — prefer that over our generated one.
+  const finalSlug = publishResult.vkSlug || slug;
+  const screenName = await getGroupScreenName();
   const articleUrl =
-    publishResult.url || `https://vk.com/@${await getGroupScreenName()}-${slug}`;
+    publishResult.url || `https://vk.com/@${screenName}-${finalSlug}`;
+
+  // Canonical URL form — numeric, never 404s if the article exists at all.
+  // Useful for debugging and as a guaranteed fallback link.
+  const canonicalUrl = `https://vk.com/@-${groupId}_${articleId}`;
 
   if (!publishResult.url) {
     console.warn(
-      `   ⚠️ VK did not return article URL — falling back to slug-based guess. ` +
-        `If the URL 404s, the article likely saved as a draft instead of published.`
+      `   ⚠️ VK did not return article.url — using slug-based URL. ` +
+        `If it 404s, try canonical: ${canonicalUrl}`
     );
   }
 
-  // Verify the article URL is actually reachable (not 404).
-  // Done with a single HEAD request — cheap and tells us if publish step really worked.
+  // Verify the article URL is actually reachable for OTHER users (anonymous fetch).
+  // VK rejects HEAD with 418 (anti-bot), so use GET. Use a fresh client (no cookies)
+  // to simulate an external visitor — if THAT 404s, it means the article is
+  // private/draft (typical when the publishing user isn't a group editor).
   try {
     const verifyRes = await fetch(articleUrl, {
-      method: 'HEAD',
-      headers: { 'User-Agent': USER_AGENT, Cookie: cookieHeader },
+      method: 'GET',
+      headers: {
+        'User-Agent':
+          'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36',
+        'Accept': 'text/html,application/xhtml+xml',
+      },
       redirect: 'follow',
     });
-    if (!verifyRes.ok) {
+    const body = await verifyRes.text();
+    const looks404 = body.includes('article_not_found') || body.includes('Эта статья не найдена') || body.includes('Article not found');
+    if (!verifyRes.ok || looks404) {
       console.warn(
-        `   ⚠️ VK Article URL returned HTTP ${verifyRes.status} on verification: ${articleUrl}\n` +
-          `      Article was probably created as a DRAFT (only visible to you in vk.com/dev/articles).\n` +
-          `      Saved articleId on VK side: ${articleId}`
+        `   ⚠️ VK Article NOT publicly visible (HTTP ${verifyRes.status}, looks404=${looks404})\n` +
+          `      URL:       ${articleUrl}\n` +
+          `      Canonical: ${canonicalUrl}\n` +
+          `      ➜ Most likely cause: the user behind VK_ACCESS_TOKEN is NOT a group admin/editor.\n` +
+          `        Articles published by non-admins land in personal drafts only.\n` +
+          `        Fix: in VK group settings → Manage → Members, give the token user editor rights.`
       );
     } else {
-      console.log(`   🔎 Verify OK (HTTP ${verifyRes.status}) — article URL is reachable`);
+      console.log(`   🔎 Verify OK (HTTP ${verifyRes.status}) — article is publicly visible`);
     }
   } catch (err: any) {
     console.warn(`   ⚠️ URL verification failed (network): ${err.message}`);
   }
 
   console.log(`   ✅ VK Article published: ${articleUrl}`);
+  console.log(`   🔗 Canonical URL:        ${canonicalUrl}`);
   return { url: articleUrl };
 }
