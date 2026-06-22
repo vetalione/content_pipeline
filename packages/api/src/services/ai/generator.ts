@@ -97,6 +97,13 @@ export async function generateContent(
     }
   }
   
+  // Some models (e.g. Claude Sonnet 4.6) occasionally return fields that the
+  // schema declares as plain strings (teaser, blockquote, bonusFact, ...) as
+  // objects like { text: "..." }. Rendering such an object in React crashes the
+  // page, and publishers would serialize it as "[object Object]". Normalize
+  // these fields to strings before persisting.
+  content = normalizeContent(content);
+
   // Note: Image matching is now done in autopilot.ts AFTER article generation
   // This allows us to search images specifically for the generated sections
   
@@ -110,6 +117,68 @@ export async function generateContent(
     }
   });
   
+  return content;
+}
+
+/**
+ * Coerce a value into a plain string. Handles the common case where a model
+ * wraps text in an object like { text: "..." } / { value: "..." }.
+ */
+function asString(value: any): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.value === 'string') return value.value;
+    if (typeof value.content === 'string') return value.content;
+  }
+  return '';
+}
+
+/**
+ * Normalize generated article content so that string fields are always strings,
+ * regardless of how the model wrapped them.
+ */
+function normalizeContent(content: any): any {
+  if (!content || typeof content !== 'object') return content;
+
+  if (content.title !== undefined) content.title = asString(content.title);
+  if (content.teaser !== undefined) content.teaser = asString(content.teaser);
+  if (content.intro !== undefined) content.intro = asString(content.intro);
+  if (content.bonusFact != null) content.bonusFact = asString(content.bonusFact) || null;
+  if (content.cta !== undefined) content.cta = asString(content.cta);
+  if (content.brandEnding !== undefined) content.brandEnding = asString(content.brandEnding);
+  if (content.motivation !== undefined) content.motivation = asString(content.motivation);
+
+  // conclusion can be a string or { heading, text }
+  if (content.conclusion && typeof content.conclusion === 'object') {
+    content.conclusion.heading = asString(content.conclusion.heading);
+    content.conclusion.text = asString(content.conclusion.text);
+  } else if (content.conclusion !== undefined) {
+    content.conclusion = asString(content.conclusion);
+  }
+
+  // heroQuote: { text, author }
+  if (content.heroQuote && typeof content.heroQuote === 'object') {
+    content.heroQuote.text = asString(content.heroQuote.text);
+    content.heroQuote.author = asString(content.heroQuote.author);
+  }
+
+  if (Array.isArray(content.sections)) {
+    content.sections = content.sections.map((section: any) => {
+      if (!section || typeof section !== 'object') return section;
+      if (section.heading !== undefined) section.heading = asString(section.heading);
+      if (section.title !== undefined) section.title = asString(section.title);
+      if (section.paragraph1 !== undefined) section.paragraph1 = asString(section.paragraph1);
+      if (section.paragraph2 !== undefined) section.paragraph2 = asString(section.paragraph2);
+      if (section.content !== undefined) section.content = asString(section.content);
+      if (section.memeText !== undefined) section.memeText = asString(section.memeText);
+      if (section.blockquote != null) section.blockquote = asString(section.blockquote) || null;
+      return section;
+    });
+  }
+
   return content;
 }
 

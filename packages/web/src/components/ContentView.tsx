@@ -20,6 +20,25 @@ interface SectionImageProgress {
   confidence?: number;
 }
 
+/**
+ * Coerce a value into a renderable string. Some AI models return fields that
+ * the schema declares as strings (teaser, blockquote, bonusFact, ...) as objects
+ * like { text: "..." }. Rendering such an object directly crashes React
+ * ("Objects are not valid as a React child" / minified error #31), producing a
+ * white screen. This safely unwraps the common shapes.
+ */
+function toText(value: any): string {
+  if (value == null) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number') return String(value);
+  if (typeof value === 'object') {
+    if (typeof value.text === 'string') return value.text;
+    if (typeof value.value === 'string') return value.value;
+    if (typeof value.content === 'string') return value.content;
+  }
+  return '';
+}
+
 export default function ContentView({ content, researchData, articleId, onUpdate }: Props) {
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001';
   const [searchingImageIds, setSearchingImageIds] = useState<Set<number>>(new Set());
@@ -149,13 +168,13 @@ export default function ContentView({ content, researchData, articleId, onUpdate
 
       {/* Title */}
       <div className="mb-8">
-        <h1 className="text-4xl font-bold mb-3">{content.title}</h1>
+        <h1 className="text-4xl font-bold mb-3">{toText(content.title)}</h1>
       </div>
 
       {/* Teaser / Intro */}
       <div className="prose max-w-none mb-8">
         <p className="text-lg leading-relaxed text-gray-700">
-          {content.teaser || content.intro}
+          {toText(content.teaser || content.intro)}
         </p>
       </div>
 
@@ -169,7 +188,7 @@ export default function ContentView({ content, researchData, articleId, onUpdate
           return (
           <div key={section.number || section.id || idx} className="border-l-4 border-primary pl-6">
             <h3 className="text-2xl font-bold mb-4">
-              {section.number || section.order}. {section.heading || section.title}
+              {section.number || section.order}. {toText(section.heading || section.title)}
             </h3>
             
             {/* Section Image */}
@@ -234,41 +253,41 @@ export default function ContentView({ content, researchData, articleId, onUpdate
             {/* New format: paragraph1 + paragraph2 */}
             {section.paragraph1 && (
               <div className="prose max-w-none mb-3">
-                <p className="whitespace-pre-wrap">{section.paragraph1}</p>
+                <p className="whitespace-pre-wrap">{toText(section.paragraph1)}</p>
               </div>
             )}
             {section.paragraph2 && (
               <div className="prose max-w-none mb-4">
-                <p className="whitespace-pre-wrap text-gray-700">{section.paragraph2}</p>
+                <p className="whitespace-pre-wrap text-gray-700">{toText(section.paragraph2)}</p>
               </div>
             )}
             
             {/* Legacy format: content */}
             {!section.paragraph1 && section.content && (
               <div className="prose max-w-none mb-4">
-                <p className="whitespace-pre-wrap">{section.content}</p>
+                <p className="whitespace-pre-wrap">{toText(section.content)}</p>
               </div>
             )}
             
             {/* Blockquote (new format) */}
-            {section.blockquote && (
+            {section.blockquote && toText(section.blockquote) && (
               <div className="my-4 p-4 bg-blue-50 border-l-4 border-blue-500 italic">
-                <p className="text-lg">{section.blockquote}</p>
+                <p className="text-lg">{toText(section.blockquote)}</p>
               </div>
             )}
 
             {/* Quote (legacy format) */}
             {section.quote && (
               <div className="my-4 p-4 bg-blue-50 border-l-4 border-blue-500">
-                <p className="italic text-lg mb-2">"{section.quote.text}"</p>
-                <p className="text-sm text-gray-600">— {section.quote.source}</p>
+                <p className="italic text-lg mb-2">"{toText(section.quote.text)}"</p>
+                <p className="text-sm text-gray-600">— {toText(section.quote.source)}</p>
               </div>
             )}
 
             {/* Meme text */}
             {section.memeText && (
               <div className="my-4 p-3 bg-yellow-50 border border-yellow-200 rounded-lg text-center">
-                <p className="font-semibold text-gray-800">{section.memeText}</p>
+                <p className="font-semibold text-gray-800">{toText(section.memeText)}</p>
               </div>
             )}
           </div>
@@ -278,18 +297,18 @@ export default function ContentView({ content, researchData, articleId, onUpdate
       {/* Conclusion */}
       <div className="prose max-w-none mb-8">
         <h3 className="text-2xl font-bold mb-4">
-          {typeof content.conclusion === 'object' ? content.conclusion.heading : 'Заключение'}
+          {typeof content.conclusion === 'object' ? toText(content.conclusion.heading) || 'Заключение' : 'Заключение'}
         </h3>
         <p className="text-lg leading-relaxed">
-          {typeof content.conclusion === 'object' ? content.conclusion.text : content.conclusion}
+          {typeof content.conclusion === 'object' ? toText(content.conclusion.text) : toText(content.conclusion)}
         </p>
       </div>
 
       {/* Hero Quote */}
       {content.heroQuote && (
         <div className="my-8 p-6 bg-gradient-to-r from-yellow-50 to-orange-50 border-l-4 border-yellow-500 rounded-r-lg">
-          <p className="text-xl italic mb-3">"{content.heroQuote.text}"</p>
-          <p className="text-right font-semibold text-gray-700">— {content.heroQuote.author}</p>
+          <p className="text-xl italic mb-3">"{toText(content.heroQuote.text)}"</p>
+          <p className="text-right font-semibold text-gray-700">— {toText(content.heroQuote.author)}</p>
         </div>
       )}
 
@@ -297,14 +316,14 @@ export default function ContentView({ content, researchData, articleId, onUpdate
       {content.bonusFact && (
         <div className="my-6 p-4 bg-purple-50 border border-purple-200 rounded-lg">
           <h4 className="font-bold text-purple-800 mb-2">🎁 Бонусный факт:</h4>
-          <p className="text-gray-800">{content.bonusFact}</p>
+          <p className="text-gray-800">{toText(content.bonusFact)}</p>
         </div>
       )}
 
       {/* CTA */}
       {content.cta && (
         <div className="my-6 p-4 bg-green-50 border border-green-200 rounded-lg">
-          <p className="text-gray-800">{content.cta}</p>
+          <p className="text-gray-800">{toText(content.cta)}</p>
         </div>
       )}
 
@@ -312,7 +331,7 @@ export default function ContentView({ content, researchData, articleId, onUpdate
       <div className="bg-gradient-to-r from-primary/10 to-secondary/10 p-6 rounded-xl">
         <h3 className="text-xl font-bold mb-3">🌟 Вывод</h3>
         <p className="text-lg leading-relaxed">
-          {content.brandEnding || content.motivation}
+          {toText(content.brandEnding || content.motivation)}
         </p>
       </div>
     </div>
