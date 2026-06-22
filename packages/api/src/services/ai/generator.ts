@@ -40,7 +40,7 @@ export async function generateContent(
     );
   }
 
-  console.log(`Generating content for ${article.celebrityName} using Claude Sonnet 4.5...`);
+  console.log(`Generating content for ${article.celebrityName} using Claude Sonnet 4.6...`);
   
   const style = (article as any).articleStyle === 'rasplata' ? 'rasplata' : 'basic';
   console.log(`📐 Article style: ${style}`);
@@ -49,7 +49,7 @@ export async function generateContent(
   const userPrompt = createGenerationPrompt(article.celebrityName, article.researchData, styleConfig);
   
   const message = await anthropic.messages.create({
-    model: 'claude-sonnet-4-20250514',
+    model: 'claude-sonnet-4-6',
     max_tokens: 16000,
     messages: [
       {

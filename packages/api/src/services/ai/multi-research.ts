@@ -140,10 +140,10 @@ async function researchWithClaude(celebrityName: string, language: 'ru' | 'en' |
   if (!process.env.ANTHROPIC_API_KEY) throw new Error('ANTHROPIC_API_KEY not configured');
   const anthropic = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
 
-  console.log(`  🤖 Claude Sonnet 4.5 (web_search) researching ${celebrityName}...`);
+  console.log(`  🤖 Claude Sonnet 4.6 (web_search) researching ${celebrityName}...`);
   const message = await Promise.race([
     anthropic.messages.create({
-      model: 'claude-sonnet-4-5',
+      model: 'claude-sonnet-4-6',
       max_tokens: 12000,
       system:
         'You are a senior biographical research consultant. Use the web_search tool aggressively to find authoritative sources (biographies, interview transcripts, court records, long-form journalism). You NEVER fabricate quotes, dates, or events. When uncertain, omit the field. Output ONLY valid JSON matching the schema requested by the user, no prose before or after, no markdown fences.',
