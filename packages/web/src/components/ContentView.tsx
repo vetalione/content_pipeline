@@ -20,6 +20,16 @@ interface SectionImageProgress {
   confidence?: number;
 }
 
+/** A Gemini-scored candidate returned by the API for manual selection */
+interface ImageCandidateOption {
+  originalUrl: string;
+  thumbnailUrl?: string;
+  sourceUrl?: string;
+  source: string;
+  confidence: number;
+  metadataScore: number;
+}
+
 /**
  * Coerce a value into a renderable string. Some AI models return fields that
  * the schema declares as strings (teaser, blockquote, bonusFact, ...) as objects
@@ -44,6 +54,9 @@ export default function ContentView({ content, researchData, articleId, onUpdate
   const [searchingImageIds, setSearchingImageIds] = useState<Set<number>>(new Set());
   const [imageProgress, setImageProgress] = useState<SectionImageProgress | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  // Per-section candidate galleries (sectionIndex → scored candidates)
+  const [sectionCandidates, setSectionCandidates] = useState<Record<number, ImageCandidateOption[]>>({});
+  const [settingImageIdx, setSettingImageIdx] = useState<number | null>(null);
   
   // Image search configuration
   const [searchConfig, setSearchConfig] = useState<ImageSearchConfig>(() => {
@@ -110,8 +123,18 @@ export default function ContentView({ content, researchData, articleId, onUpdate
         throw new Error(result.message || 'Failed to find image');
       }
 
-      console.log('✅ Section image found:', result.data);
-      onUpdate?.();
+      // Store scored candidates so the user can always re-pick manually —
+      // including when auto-selection didn't clear the quality floor.
+      const candidates: ImageCandidateOption[] = result.data?.candidates || [];
+      setSectionCandidates(prev => ({ ...prev, [sectionIndex]: candidates }));
+
+      if (result.success) {
+        console.log('✅ Section image found:', result.data);
+        onUpdate?.();
+      } else {
+        // No auto-pick, but candidates are available for manual choice
+        console.log(`ℹ️ No image cleared the quality floor; ${candidates.length} candidates available for manual pick`);
+      }
     } catch (error) {
       console.error('Section image search error:', error);
       setImageProgress({
@@ -127,6 +150,37 @@ export default function ContentView({ content, researchData, articleId, onUpdate
         newSet.delete(sectionIndex);
         return newSet;
       });
+    }
+  };
+
+  // Manually pick a candidate from the gallery
+  const handlePickCandidate = async (sectionIndex: number, candidate: ImageCandidateOption) => {
+    setSettingImageIdx(sectionIndex);
+    try {
+      const response = await fetch(`${API_URL}/api/articles/${articleId}/sections/${sectionIndex}/set-image`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          imageUrl: candidate.originalUrl,
+          thumbnailUrl: candidate.thumbnailUrl
+        })
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || 'Failed to set image');
+      }
+      // Clear gallery for this section and refresh article
+      setSectionCandidates(prev => {
+        const next = { ...prev };
+        delete next[sectionIndex];
+        return next;
+      });
+      onUpdate?.();
+    } catch (error) {
+      console.error('Set image error:', error);
+      alert(error instanceof Error ? error.message : 'Не удалось установить изображение');
+    } finally {
+      setSettingImageIdx(null);
     }
   };
 
@@ -247,6 +301,63 @@ export default function ContentView({ content, researchData, articleId, onUpdate
                     💡 Подсказка: {matchingFact.visualSuggestion}
                   </p>
                 )}
+              </div>
+            )}
+
+            {/* Candidate gallery — manual pick when auto-selection failed or user wants alternatives */}
+            {sectionCandidates[idx] && sectionCandidates[idx].length > 0 && (
+              <div className="my-4 p-4 bg-amber-50 border border-amber-200 rounded-lg">
+                <p className="text-sm font-medium text-amber-900 mb-3">
+                  🖼️ Кандидаты от поиска (оценка Gemini) — выберите вручную:
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                  {sectionCandidates[idx].map((cand, ci) => (
+                    <button
+                      key={ci}
+                      onClick={() => handlePickCandidate(idx, cand)}
+                      disabled={settingImageIdx === idx}
+                      className="relative group/cand rounded-lg overflow-hidden border-2 border-transparent hover:border-amber-500 transition disabled:opacity-50 bg-gray-100 text-left"
+                      title={`Источник: ${cand.source} | Уверенность: ${cand.confidence}%`}
+                    >
+                      <img
+                        src={cand.thumbnailUrl || cand.originalUrl}
+                        alt={`Кандидат ${ci + 1}`}
+                        className="w-full h-28 object-cover"
+                        loading="lazy"
+                        onError={(e) => {
+                          // Thumbnail broken → try original once, then hide
+                          const img = e.currentTarget;
+                          if (cand.thumbnailUrl && img.src !== cand.originalUrl) {
+                            img.src = cand.originalUrl;
+                          } else {
+                            (img.closest('button') as HTMLElement | null)?.style.setProperty('display', 'none');
+                          }
+                        }}
+                      />
+                      <span className={`absolute top-1 left-1 text-xs font-bold px-1.5 py-0.5 rounded ${
+                        cand.confidence >= 70 ? 'bg-green-500 text-white' :
+                        cand.confidence >= 50 ? 'bg-yellow-500 text-white' :
+                        'bg-red-500 text-white'
+                      }`}>
+                        {cand.confidence}%
+                      </span>
+                      <span className="absolute bottom-0 inset-x-0 bg-black/60 text-white text-[10px] px-1 py-0.5 truncate">
+                        {cand.source}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+                <div className="flex justify-between items-center mt-3">
+                  <p className="text-xs text-amber-700">
+                    {settingImageIdx === idx ? 'Сохраняем выбранное изображение...' : 'Клик по картинке — вставить её в секцию.'}
+                  </p>
+                  <button
+                    onClick={() => setSectionCandidates(prev => { const n = { ...prev }; delete n[idx]; return n; })}
+                    className="text-xs text-amber-700 underline hover:text-amber-900"
+                  >
+                    Скрыть
+                  </button>
+                </div>
               </div>
             )}
             

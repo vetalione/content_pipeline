@@ -1,7 +1,7 @@
 import { Router } from 'express';
 import { prisma } from '../lib/db';
 import { Article, ArticleStatus, PipelineStage } from '@content-pipeline/shared';
-import { searchGoogleImages, findFactImage } from '../services/media/google-images';
+import { searchGoogleImages, findFactImage, downloadAndCacheImage, type ScoredImageCandidate } from '../services/media/google-images';
 import { getIO } from '../lib/socket';
 
 export const articlesRouter = Router();
@@ -326,6 +326,10 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
     
     console.log(`🔍 Finding image for fact "${fact.title}"`);
     
+    // Collect all Gemini-scored candidates so the UI can offer manual pick
+    // when the auto-selection doesn't clear the quality floor.
+    let factCandidates: ScoredImageCandidate[] = [];
+
     // Use full findFactImage with Gemini validation
     const imageUrl = await findFactImage(
       article.celebrityName,
@@ -358,6 +362,7 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
         confidenceThreshold,
         resultsPerSource,
         excludeLocalPaths: usedPaths,
+        onCandidates: (cands) => { factCandidates = cands; },
       }
     );
     
@@ -367,12 +372,14 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
         factId,
         status: 'not-found',
         progress: 100,
-        message: 'Изображение не найдено'
+        message: 'Автоподбор не прошёл порог качества — выберите вручную из кандидатов'
       });
       
-      return res.status(404).json({ 
+      // Not a dead-end: return the scored candidates so the user can pick one manually
+      return res.status(200).json({ 
         success: false, 
-        message: 'No suitable image found' 
+        message: 'No suitable image found',
+        data: { factId, candidates: factCandidates }
       });
     }
     
@@ -402,7 +409,8 @@ articlesRouter.post('/:id/facts/:factId/find-image', async (req, res, next) => {
       success: true, 
       data: { 
         factId,
-        imageUrl 
+        imageUrl,
+        candidates: factCandidates
       } 
     });
     
@@ -503,6 +511,9 @@ articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, n
       console.log(`  ✅ Matched to fact: "${matchingFact.title}"`);
       console.log(`  🎨 Visual suggestion: "${visualSuggestion}"`);
     }
+
+    // Collect all Gemini-scored candidates for the manual-pick gallery
+    let sectionCandidates: ScoredImageCandidate[] = [];
     
     // Use findFactImage with Gemini validation
     const imageUrl = await findFactImage(
@@ -527,7 +538,11 @@ articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, n
             : 'Поиск...'
         });
       },
-      { useGoogle, useBrave, usePerplexity, useOpenAI, confidenceThreshold, resultsPerSource, excludeLocalPaths: usedPaths }
+      {
+        useGoogle, useBrave, usePerplexity, useOpenAI, confidenceThreshold, resultsPerSource,
+        excludeLocalPaths: usedPaths,
+        onCandidates: (cands) => { sectionCandidates = cands; },
+      }
     );
     
     if (!imageUrl) {
@@ -536,12 +551,14 @@ articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, n
         sectionIndex: sectionIdx,
         status: 'not-found',
         progress: 100,
-        message: 'Изображение не найдено'
+        message: 'Автоподбор не прошёл порог качества — выберите вручную из кандидатов'
       });
       
-      return res.status(404).json({ 
+      // Not a dead-end: hand back the scored candidates for manual selection in the UI
+      return res.status(200).json({ 
         success: false, 
-        message: 'No suitable image found' 
+        message: 'No suitable image found',
+        data: { sectionIndex: sectionIdx, candidates: sectionCandidates }
       });
     }
     
@@ -574,7 +591,8 @@ articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, n
       success: true, 
       data: { 
         sectionIndex: sectionIdx,
-        imageUrl 
+        imageUrl,
+        candidates: sectionCandidates
       } 
     });
     
@@ -592,6 +610,87 @@ articlesRouter.post('/:id/sections/:sectionIndex/find-image', async (req, res, n
       });
     } catch {}
     
+    next(error);
+  }
+});
+
+// Manually set an image for a SECTION (used by the candidate-pick gallery).
+// Accepts a web URL (downloads + caches it locally) or an already-local /images/ path.
+articlesRouter.post('/:id/sections/:sectionIndex/set-image', async (req, res, next) => {
+  try {
+    const { id: articleId, sectionIndex } = req.params;
+    const sectionIdx = parseInt(sectionIndex, 10);
+    const { imageUrl, thumbnailUrl } = req.body || {};
+
+    if (!imageUrl || typeof imageUrl !== 'string') {
+      return res.status(400).json({ success: false, message: 'imageUrl is required' });
+    }
+
+    const article = await prisma.article.findUnique({ where: { id: articleId } });
+    if (!article || !article.content) {
+      return res.status(404).json({ success: false, message: 'Article or content not found' });
+    }
+
+    const content = article.content as any;
+    const sections = content.sections || [];
+    if (sectionIdx < 0 || sectionIdx >= sections.length) {
+      return res.status(404).json({ success: false, message: 'Section not found' });
+    }
+
+    // Local paths are stored as-is; web URLs get downloaded & cached
+    const finalUrl = imageUrl.startsWith('/images/')
+      ? imageUrl
+      : await downloadAndCacheImage(imageUrl, thumbnailUrl);
+
+    sections[sectionIdx].imageUrl = finalUrl;
+
+    await prisma.article.update({
+      where: { id: articleId },
+      data: { content: { ...content, sections } as any, updatedAt: new Date() }
+    });
+
+    console.log(`✅ Manually set image for section ${sectionIdx + 1}: ${finalUrl}`);
+    res.json({ success: true, data: { sectionIndex: sectionIdx, imageUrl: finalUrl } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Manually set an image for a FACT (used by the candidate-pick gallery).
+articlesRouter.post('/:id/facts/:factId/set-image', async (req, res, next) => {
+  try {
+    const { id: articleId, factId } = req.params;
+    const { imageUrl, thumbnailUrl } = req.body || {};
+
+    if (!imageUrl || typeof imageUrl !== 'string') {
+      return res.status(400).json({ success: false, message: 'imageUrl is required' });
+    }
+
+    const article = await prisma.article.findUnique({ where: { id: articleId } });
+    if (!article || !article.researchData) {
+      return res.status(404).json({ success: false, message: 'Article or research data not found' });
+    }
+
+    const researchData = article.researchData as any;
+    const factIndex = researchData.facts?.findIndex((f: any) => f.id === factId);
+    if (factIndex === -1 || factIndex === undefined) {
+      return res.status(404).json({ success: false, message: 'Fact not found' });
+    }
+
+    const finalUrl = imageUrl.startsWith('/images/')
+      ? imageUrl
+      : await downloadAndCacheImage(imageUrl, thumbnailUrl);
+
+    researchData.facts[factIndex].imageUrl = finalUrl;
+
+    await prisma.article.update({
+      where: { id: articleId },
+      data: { researchData: researchData as any, updatedAt: new Date() }
+    });
+
+    console.log(`✅ Manually set image for fact "${factId}": ${finalUrl}`);
+    res.json({ success: true, data: { factId, imageUrl: finalUrl } });
+  } catch (error) {
     next(error);
   }
 });

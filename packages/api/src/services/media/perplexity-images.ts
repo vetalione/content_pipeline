@@ -47,28 +47,40 @@ ARTICLE CONCEPT: We write articles showing the HIDDEN side of famous people — 
 
 YOUR TASK: Find RARE HISTORICAL photographs matching the user's description.
 
-PRIORITY SOURCES (use these first — in order):
-1. Wikimedia Commons (commons.wikimedia.org) — historical archive with era-specific photos
-2. Archive.org — digitized newspapers, books, historic photo collections
-3. Newspapers.com / ChroniclingAmerica — historical newspaper photos
-4. News agency archives: AP, Reuters, AFP, UPI, TASS (if publicly accessible)
-5. Museum digital collections, government archives (loc.gov, nara.gov)
-6. University library archives
+PRIORITY SOURCES — pick the right tier for the SUBJECT'S ERA:
 
-AVOID THESE (they give mainstream, overused photos):
+A) HISTORICAL FIGURES (pre-photography, died before ~1850 — Aristotle, Pushkin, da Vinci):
+   Photographs CANNOT exist. Find period paintings, portraits, engravings, busts, statues from:
+   1. Wikimedia Commons (commons.wikimedia.org)
+   2. Museum digital collections: metmuseum.org, npg.org.uk, hermitagemuseum.org, louvre.fr, rijksmuseum.nl, getty.edu, si.edu
+   3. europeana.eu, archive.org (digitized books/engravings)
+
+B) 19th–20th CENTURY FIGURES (archival photos exist):
+   1. Wikimedia Commons (commons.wikimedia.org) — era-specific photos
+   2. Archive.org — digitized newspapers, books, historic photo collections
+   3. loc.gov, nara.gov, ChroniclingAmerica — government/newspaper archives
+   4. flickr.com/commons — institutional public-domain collections
+   5. University library archives, museum collections
+
+C) MODERN & EMERGING CELEBRITIES (rappers, influencers, young stars — little archival material):
+   1. Press/news outlets: rollingstone.com, billboard.com, variety.com, hollywoodreporter.com, theguardian.com, nytimes.com, complex.com, pitchfork.com, xxlmag.com
+   2. Local/regional press from their hometown (early-career coverage = rare shots)
+   3. Event/festival photo coverage, interviews, red-carpet from their FIRST years
+   4. Yearbook photos, early social-media era photos republished by news media
+
+AVOID THESE (they give mainstream, overused, or unusable images):
 - wikipedia.org MAIN ARTICLE (returns the single most famous headshot — wrong for rare content)
-- Getty Images, Shutterstock, Alamy, iStock (paid, mainstream)
-- Pinterest, Instagram (aggregators, not originals)
+- Getty Images, Shutterstock, Alamy, iStock (paid, watermarked)
+- Pinterest, Instagram direct links (aggregators, hotlink-blocked)
 - Collages / "through the years" compilations
 - Modern promotional/studio shots (unless the context is modern)
-- Stock photo sites of any kind
 
-RARITY CRITERIA (what makes a photo valuable for our articles):
+RARITY CRITERIA (what makes an image valuable for our articles):
 ✅ Era-appropriate: visually matches the decade/year described
 ✅ Documentary/candid style — not a posed studio portrait
 ✅ Shows the person in a specific context (at work, in difficulty, in early career)
 ✅ Black & white or aged photos for historical contexts = HIGHLY VALUED
-✅ One clear photo of the person (not a collage)
+✅ One clear image of the person (not a collage)
 ❌ Modern crisp promotional headshots for historical facts = WRONG
 ❌ Always-seen mainstream portraits = low value for our content
 
@@ -125,11 +137,12 @@ export async function searchPerplexityImages(
         temperature: 0.1,
         max_tokens: 1000,
         return_images: true,
+        // BLOCKLIST ONLY. The previous mixed filter acted as a whitelist
+        // (wikimedia/wikipedia/archive.org), which silently blocked news
+        // outlets and museum collections — fatal for modern/emerging stars
+        // who have no Wikimedia presence. Source PRIORITIES are handled by
+        // the system prompt; here we only block unusable stock/aggregators.
         image_domain_filter: [
-          'wikimedia.org',
-          'commons.wikimedia.org',
-          'wikipedia.org',
-          'archive.org',
           '-gettyimages.com',
           '-shutterstock.com',
           '-pinterest.com',

@@ -106,10 +106,12 @@ export async function validateImageRelevance(
   const apiKey = process.env.GEMINI_API_KEY;  // same key used by gemini-cover.ts
   
   if (!apiKey) {
+    // LOUD failure — a silent 50% here used to make selection look random.
+    console.error('❌ GEMINI_API_KEY is not set — image validation is DISABLED. Set it in the environment (Railway → Variables).');
     return {
-      isRelevant: true,
-      confidence: 50,
-      reasoning: 'API key not configured'
+      isRelevant: false,
+      confidence: 0,
+      reasoning: 'GEMINI_API_KEY not configured — validation unavailable'
     };
   }
 
@@ -203,10 +205,12 @@ REMEMBER: "confidence" = how GOOD this image is for the article, NOT how sure yo
     return parsed;
 
   } catch (error) {
+    // Errors must NOT masquerade as a "mediocre but acceptable" photo.
+    // conf=0 → the candidate can never win over a genuinely validated one.
     return {
-      isRelevant: true,
-      confidence: 40,
-      reasoning: `Error: ${error instanceof Error ? error.message : 'Unknown'}`
+      isRelevant: false,
+      confidence: 0,
+      reasoning: `Validation error: ${error instanceof Error ? error.message : 'Unknown'}`
     };
   }
 }
@@ -287,13 +291,17 @@ export async function batchValidateImages(
   celebrityName: string,
   description: string,
   factYear?: number,
+  era: 'pre_photography' | 'photography' = 'photography',
 ): Promise<BatchValidationResult | null> {
   if (candidates.length === 0) return null;
 
   const apiKey = process.env.GEMINI_API_KEY;  // same key used by gemini-cover.ts
   if (!apiKey) {
-    // Fallback: return first candidate at 50% confidence so pipeline doesn't break
-    return { bestIndex: 0, confidence: 50, reasoning: 'API key not configured', scores: candidates.map(() => 50) };
+    // LOUD failure — do NOT return fake 50% scores for images nobody looked at.
+    // Unvalidated images competing with validated ones is what made selection
+    // feel random. Callers treat null as "validation unavailable".
+    console.error('❌ GEMINI_API_KEY is not set — batch image validation is DISABLED. Set it in the environment (Railway → Variables).');
+    return null;
   }
 
   const batch = candidates.slice(0, BATCH_SIZE);
@@ -319,15 +327,11 @@ export async function batchValidateImages(
     .filter((p): p is typeof p & { imgData: NonNullable<typeof p.imgData> } => p.imgData !== null);
 
   if (validPairs.length === 0) {
-    console.log('  ⚠️ Batch: no images could be fetched — returning metadata-best candidate at 50%');
-    // Don't return null — that causes the section to get no image at all.
-    // Return index 0 (batch is pre-sorted by metadata score, so index 0 is best).
-    return {
-      bestIndex: 0,
-      confidence: 50,
-      reasoning: 'Image fetch failed for all candidates; selected by metadata score',
-      scores: batch.map(() => 50),
-    };
+    // Nobody has SEEN these images — do not award them fake 50% scores that
+    // let them beat genuinely validated candidates from other batches.
+    // null = "this batch could not be validated"; the orchestrator moves on.
+    console.log('  ⚠️ Batch: no images could be fetched — skipping batch (unvalidated images are never selected)');
+    return null;
   }
 
   try {
@@ -348,7 +352,30 @@ export async function batchValidateImages(
       ? `\nPENALTY: Deduct 15 pts if the photo is clearly a modern (post-2010) promotional/studio shot — it is wrong for a ${factYear} context.`
       : '';
 
-    const intro = `You are validating photos for a RARE BIOGRAPHICAL article.
+    // Pre-photography figures (Aristotle, Pushkin, ...) have NO photos —
+    // paintings, engravings, busts and statues are the CORRECT imagery and
+    // must NOT be rejected as "illustration, not a photo".
+    const isPrePhoto = era === 'pre_photography';
+
+    const intro = isPrePhoto
+      ? `You are validating images for a RARE BIOGRAPHICAL article about a HISTORICAL figure.
+Subject: "${celebrityName}" — lived BEFORE photography existed.
+Section: "${description}"${eraLine}
+
+VALID imagery for this person: period paintings, portraits, engravings, lithographs, busts, statues, manuscript illustrations. Photographs of this person CANNOT exist — do NOT expect one.
+
+I'm showing you ${validPairs.length} image(s) numbered 1–${validPairs.length}.
+Score EACH from 0–100:
+  85–100 : Clearly depicts "${celebrityName}" (recognizable/classical depiction) + matches the section context
+  65–84  : Depicts "${celebrityName}", generic or uncertain context match
+  40–64  : Might depict "${celebrityName}", unclear
+  0–39   : Different person/subject, modern stock art, meme, movie still with an actor, unrelated scene
+
+PENALIZE: collage/grid (−20), heavy watermark (−10), cartoonish modern illustration (−15).
+
+OUTPUT ONLY valid JSON (no markdown):
+{"scores":[85,10,40],"best":0,"reasoning":"one sentence about the winner"}`
+      : `You are validating photos for a RARE BIOGRAPHICAL article.
 Celebrity: "${celebrityName}"
 Section: "${description}"${eraLine}${eraPenalty}
 
@@ -419,7 +446,13 @@ OUTPUT ONLY valid JSON (no markdown):
       scores: fullScores,
     };
   } catch (error: any) {
-    console.error('  ❌ Batch Gemini validation error:', error.message);
+    const msg = String(error?.message ?? error);
+    // Make key problems unmissable in Railway logs — an expired/invalid key
+    // previously degraded silently into random-looking selection.
+    if (msg.includes('API_KEY_INVALID') || msg.includes('API key not valid') || msg.includes('PERMISSION_DENIED') || msg.includes('401') || msg.includes('403')) {
+      console.error('❌ GEMINI_API_KEY is INVALID or lacks permissions — image validation is failing. Rotate the key in Railway → Variables.');
+    }
+    console.error('  ❌ Batch Gemini validation error:', msg);
     return null;
   }
 }

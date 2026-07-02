@@ -59,6 +59,7 @@ import { searchBraveImages } from './brave-images';
 import { searchPerplexityImages } from './perplexity-images';
 import { searchOpenAIImages } from './openai-images';
 import { getWikipediaImages, searchWikimediaCommons } from './wikipedia-images';
+import { buildSearchQueries } from './query-builder';
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Core shared type
@@ -142,6 +143,22 @@ export function scoreByMetadata(
   ) {
     score += 5; // Government / institutional archives
   } else if (
+    // Museum digital collections — the RIGHT source for pre-photography figures
+    // (paintings, engravings, busts) and often for rare historical photos too
+    sourceUrl.includes('metmuseum.org') ||
+    sourceUrl.includes('npg.org.uk') ||
+    sourceUrl.includes('nationalgallery') ||
+    sourceUrl.includes('hermitagemuseum.org') ||
+    sourceUrl.includes('louvre.fr') ||
+    sourceUrl.includes('rijksmuseum.nl') ||
+    sourceUrl.includes('getty.edu') ||
+    sourceUrl.includes('si.edu') ||
+    sourceUrl.includes('europeana.eu') ||
+    sourceUrl.includes('tretyakovgallery') ||
+    sourceUrl.includes('rusmuseum')
+  ) {
+    score += 5;
+  } else if (
     sourceUrl.includes('newspapers.com') ||
     sourceUrl.includes('chroniclingamerica') ||
     sourceUrl.includes('newspapers.library')
@@ -160,6 +177,30 @@ export function scoreByMetadata(
     sourceUrl.includes('biography.com') ||
     sourceUrl.includes('imdb.com') ||
     sourceUrl.includes('history.com')
+  ) {
+    score += 3;
+  } else if (
+    // Reputable press — the PRIMARY source of rare early-career shots for
+    // modern/emerging celebrities (rappers, young stars) who have no
+    // Wikimedia/archive presence yet
+    sourceUrl.includes('rollingstone.com') ||
+    sourceUrl.includes('billboard.com') ||
+    sourceUrl.includes('variety.com') ||
+    sourceUrl.includes('hollywoodreporter.com') ||
+    sourceUrl.includes('theguardian.com') ||
+    sourceUrl.includes('nytimes.com') ||
+    sourceUrl.includes('washingtonpost.com') ||
+    sourceUrl.includes('bbc.co') ||
+    sourceUrl.includes('complex.com') ||
+    sourceUrl.includes('pitchfork.com') ||
+    sourceUrl.includes('xxlmag.com') ||
+    sourceUrl.includes('vulture.com') ||
+    sourceUrl.includes('gq.com') ||
+    sourceUrl.includes('vanityfair.com') ||
+    sourceUrl.includes('kommersant.ru') ||
+    sourceUrl.includes('kp.ru') ||
+    sourceUrl.includes('ria.ru') ||
+    sourceUrl.includes('tass.ru')
   ) {
     score += 3;
   } else if (sourceUrl.includes('.gov') || sourceUrl.includes('archive')) {
@@ -310,18 +351,20 @@ function translateCelebrityName(name: string): string {
     return CELEBRITY_TRANSLATIONS[lowerName];
   }
   
-  // Check partial matches (for variations like "Николы Теслы")
+  // Check partial matches (for declensions like "Николы Теслы").
+  // SAFETY: require BOTH name parts to prefix-match (6+ chars on the first).
+  // The old 4-letter single-word match could swap the person entirely
+  // (e.g. "Джимми Фэллон" → "Jim Carrey" via "джим").
+  const nameWords = lowerName.split(' ').filter(Boolean);
   for (const [ru, en] of Object.entries(CELEBRITY_TRANSLATIONS)) {
-    // Check if the input contains the key name (for genitive case etc)
     const ruWords = ru.split(' ');
-    const nameWords = lowerName.split(' ');
-    
-    // Match if first word starts similarly (handles Russian declensions)
-    if (ruWords[0] && nameWords[0] && 
-        (nameWords[0].startsWith(ruWords[0].substring(0, 4)) || 
-         ruWords[0].startsWith(nameWords[0].substring(0, 4)))) {
-      return en;
-    }
+    if (ruWords.length !== nameWords.length) continue;
+    const allPartsMatch = ruWords.every((rw, i) => {
+      const nw = nameWords[i];
+      const prefixLen = Math.min(Math.max(rw.length - 2, 4), 6);
+      return nw.startsWith(rw.substring(0, prefixLen)) || rw.startsWith(nw.substring(0, prefixLen));
+    });
+    if (allPartsMatch) return en;
   }
   
   // Fallback to transliteration
@@ -626,6 +669,13 @@ export interface ImageSearchOptions {
   usePerplexity?: boolean;
   useOpenAI?: boolean;
   confidenceThreshold?: number;
+  /**
+   * QUALITY FLOOR: candidates whose Gemini confidence is below this are NEVER
+   * selected — better no image than a dog collar. This is what used to make
+   * "re-pick" degrade with every click: with used images excluded, the code
+   * happily walked down to 5–20% candidates. Default 55.
+   */
+  minAcceptableConfidence?: number;
   resultsPerSource?: number;
   excludeUrls?: string[];  // Web URLs to exclude (already used as source)
   /**
@@ -647,6 +697,23 @@ export interface ImageSearchOptions {
    * rare sources so each fact gets an era-appropriate, non-mainstream image.
    */
   isCoverPhoto?: boolean;
+  /**
+   * Called with ALL Gemini-scored candidates (best-first) after validation,
+   * regardless of whether a winner was auto-selected. Lets the UI offer a
+   * manual "pick one of these" gallery instead of a dead-end when nothing
+   * clears the quality floor.
+   */
+  onCandidates?: (candidates: ScoredImageCandidate[]) => void;
+}
+
+/** A validated candidate exposed to the UI for manual selection. */
+export interface ScoredImageCandidate {
+  originalUrl: string;
+  thumbnailUrl?: string;
+  sourceUrl?: string;
+  source: string;
+  confidence: number;    // Gemini score 0–100
+  metadataScore: number;
 }
 
 /**
@@ -723,12 +790,27 @@ export async function findFactImage(
     excludeLocalPaths = [],
   } = options ?? {};
 
+  // Quality floor never exceeds the user's early-exit threshold (otherwise a
+  // candidate could pass early-exit yet be rejected by the floor).
+  const minAcceptableConfidence = Math.min(options?.minAcceptableConfidence ?? 55, confidenceThreshold);
+
   const excludedUrlSet = new Set(excludeUrls.map(u => u.toLowerCase()));
   const excludedLocalSet = new Set(excludeLocalPaths.map(u => u.toLowerCase()));
-  const englishName = translateCelebrityName(celebrityName);
   const nameIsEnglish = isEnglishName(celebrityName);
 
-  console.log(`  👤 Name: "${celebrityName}" → "${englishName}"`);
+  // ── AI query preparation (one cheap cached Gemini Flash call per fact) ────
+  // Produces the canonical English name + keywords that PRESERVE the specific
+  // moment from visual_suggestion. Falls back to legacy dictionary logic if
+  // Gemini is unavailable.
+  const built = await buildSearchQueries(
+    celebrityName,
+    visualSuggestion ?? factTitle,
+    factYear,
+  );
+
+  const englishName = built?.englishName || translateCelebrityName(celebrityName);
+
+  console.log(`  👤 Name: "${celebrityName}" → "${englishName}"${built ? ' (AI)' : ' (legacy)'}`);
 
   // ── TIER 0: Recognition photo (cover/header only) ───────────────────────
   //
@@ -757,18 +839,29 @@ export async function findFactImage(
   }
 
   // ── Build search queries ──────────────────────────────────────────────────
-  let keywords = '';
-  let keywordsRu = '';
-  if (visualSuggestion) {
+  // Prefer AI-built keywords (they keep the specific moment: age, place,
+  // activity, era). Legacy dictionary extraction is the fallback only.
+  let keywords = built?.enKeywords || '';
+  let keywordsRu = built?.ruKeywords || '';
+  if (!keywords && visualSuggestion) {
     keywords = extractKeywords(visualSuggestion, celebrityName);
+  }
+  if (!keywordsRu && visualSuggestion) {
     keywordsRu = extractKeywordsRussian(visualSuggestion, celebrityName);
   }
+
+  // Pre-photography figures: searching for "photo" of Aristotle returns memes
+  // and movie stills — search for portraits/paintings/engravings instead.
+  const isPrePhoto = built?.era === 'pre_photography';
 
   const enQueryParts = [englishName];
   if (keywords) enQueryParts.push(keywords);
   // Only add year separately if it's not already embedded in the extracted keywords
   if (factYear && !keywords.includes(String(factYear))) enQueryParts.push(String(factYear));
-  enQueryParts.push('photo');
+  const enMediaWord = isPrePhoto ? 'portrait painting' : 'photo';
+  if (!keywords.toLowerCase().includes('photo') && !keywords.toLowerCase().includes('painting') && !keywords.toLowerCase().includes('engraving')) {
+    enQueryParts.push(enMediaWord);
+  }
   const enQuery = enQueryParts.join(' ');
   console.log(`  🔎 Google EN: "${enQuery}"`);
 
@@ -777,7 +870,12 @@ export async function findFactImage(
     const ruParts = [celebrityName];
     if (keywordsRu) ruParts.push(keywordsRu);
     if (factYear && !keywordsRu.includes(String(factYear))) ruParts.push(String(factYear));
-    ruParts.push(factYear && factYear < 1970 ? 'архивное фото' : factYear && factYear < 2000 ? 'редкое фото' : 'фото');
+    ruParts.push(
+      isPrePhoto ? 'портрет картина'
+        : factYear && factYear < 1970 ? 'архивное фото'
+        : factYear && factYear < 2000 ? 'редкое фото'
+        : 'фото'
+    );
     ruQuery = ruParts.join(' ');
     console.log(`  🔎 Google RU: "${ruQuery}"`);
   }
@@ -890,7 +988,7 @@ export async function findFactImage(
 
   for (let i = 0; i < toValidate.length && !earlyExit; i += 4) {
     const batch = toValidate.slice(i, i + 4);
-    const batchResult = await batchValidateImages(batch, celebrityName, description, factYear);
+    const batchResult = await batchValidateImages(batch, celebrityName, description, factYear, built?.era ?? 'photography');
     if (!batchResult) continue;
 
     if (onProgress) {
@@ -920,9 +1018,34 @@ export async function findFactImage(
   // Rank by Gemini confidence (desc), tiebreak by metadata score (desc)
   scored.sort((a, b) => (b.conf - a.conf) || (b.c.metadataScore - a.c.metadataScore));
 
-  // Walk best → worst. Download each and skip if it's already used in this article
-  // (either the web URL matches or — critically — the content-hashed local path matches).
+  // Expose ALL scored candidates to the caller (UI manual-pick gallery).
+  // Even when nothing clears the floor, the user can still choose by eye —
+  // no more dead-ends in the frontend.
+  if (options?.onCandidates) {
+    options.onCandidates(
+      scored
+        .filter(({ c }) => !excludedUrlSet.has(c.originalUrl.toLowerCase()))
+        .map(({ c, conf }) => ({
+          originalUrl: c.originalUrl,
+          thumbnailUrl: c.thumbnailUrl,
+          sourceUrl: c.sourceUrl,
+          source: c.source,
+          confidence: conf,
+          metadataScore: c.metadataScore,
+        }))
+    );
+  }
+
+  // Walk best → worst, but NEVER below the quality floor.
+  // Previously this loop accepted the first non-duplicate at ANY confidence
+  // (even 0%) — that is exactly how irrelevant photos ended up in articles,
+  // and why every "re-pick" click made things worse (used images excluded →
+  // fall through to progressively worse candidates).
   for (const { c, conf } of scored) {
+    if (conf < minAcceptableConfidence) {
+      console.log(`  🚫 Below quality floor (${conf}% < ${minAcceptableConfidence}%) — stopping. Better no image than a wrong one.`);
+      break; // scored is sorted desc — everything after is worse
+    }
     if (excludedUrlSet.has(c.originalUrl.toLowerCase())) {
       console.log(`  ⏭️  URL already used (dup): ${c.originalUrl.substring(0, 70)}`);
       continue;
@@ -938,18 +1061,10 @@ export async function findFactImage(
     return localPath;
   }
 
-  // All validated candidates are duplicates — try metadata-ordered fallback
-  console.log(`  ⚠️ All validated candidates are duplicates; trying metadata-ordered fallback...`);
-  for (const c of sorted) {
-    if (excludedUrlSet.has(c.originalUrl.toLowerCase())) continue;
-    const localPath = await downloadAndCacheImage(c.originalUrl, c.thumbnailUrl);
-    if (!localPath) continue;
-    if (excludedLocalSet.has(localPath.toLowerCase())) continue;
-    console.log(`  ✅ Fallback pick (metadata=${c.metadataScore}): ${localPath}`);
-    return localPath;
-  }
-
-  console.log(`  ❌ No unique image candidates left — giving up`);
+  // NOTE: the old "metadata-ordered fallback" (pick ANY unvalidated candidate
+  // by domain score) was removed deliberately — it inserted images Gemini
+  // never approved and was a major source of irrelevant photos.
+  console.log(`  ❌ No candidate reached the ${minAcceptableConfidence}% quality floor — returning no image`);
   return null;
 }
 
@@ -995,7 +1110,7 @@ async function resolveWikimediaPageUrl(url: string): Promise<string> {
   return url;
 }
 
-async function downloadAndCacheImage(
+export async function downloadAndCacheImage(
   originalUrl: string,
   thumbnailUrl?: string
 ): Promise<string> {
