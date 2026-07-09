@@ -221,16 +221,16 @@ export function buildCoverPrompt(options: CoverGenerationOptions): {
 
   const iconsText = icons.join(', ');
 
-  const prompt = `Create a professional cover image for a biography article about ${heroName}. Design specifications:
-- Style: Realistic photo collage cover art with dramatic visual impact
-- Central element: Professional cutout portrait of ${heroName} in their prime, making direct eye contact with viewer
+  const prompt = `Editorial cover illustration for a motivational biography feature (in the style of Forbes/Time "comeback story" profiles) celebrating ${heroName}'s resilience, perseverance and rise to success. Tone: respectful, uplifting, inspirational — this is a tribute to how they overcame adversity on the way to achievement, not a negative, mocking, or sensational depiction. Design specifications:
+- Style: Realistic photo collage editorial cover art with dramatic, inspiring visual impact
+- Central element: Dignified editorial-style illustrated portrait of ${heroName} in their prime, presented as a torn-edge paper collage cutout layered on top of the chalkboard with a subtle drop shadow, confident and inspiring expression, direct eye contact with viewer
 - Background: Dark, textured chalkboard with chalk scratches and artistic marks
-- Visual accent: Vibrant ${colorScheme} cloud/aura effect behind the figure using chalk/pastel style
-- Icons: Include ${iconsText} as chalk-drawn elements related to ${heroName}'s achievements
+- Visual accent: Vibrant ${colorScheme} cloud/aura effect behind the figure using chalk/pastel style, evoking triumph and energy
+- Icons: Include ${iconsText} as chalk-drawn elements celebrating ${heroName}'s achievements
 - Text elements:
   * Title at top in chalk font: "${title}"
-  * Arrow pointing to figure with annotation: "${sharpFact}"
-- Final style: Blend of photography and chalk illustration on aged chalkboard
+  * Arrow pointing to figure with a short annotation naming the obstacle they overcame on their path to success: "${sharpFact}"
+- Final style: Blend of photography and chalk illustration on aged chalkboard, magazine-cover quality
 - Quality: Sharp, legible text and diagrams, professional finish
 - Aspect ratio: 16:9, resolution: 4K`;
 
