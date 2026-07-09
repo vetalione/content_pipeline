@@ -1,10 +1,10 @@
 import path from 'path';
 import { prisma } from '../../lib/db';
 import { PipelineStage } from '@content-pipeline/shared';
-import { generateCoverImage, getCoverPreviewOptions, getAllColorCombinations, CoverGenerationOptions } from './gemini-cover';
+import { generateCoverImage, generateCoverImageGeminiPro, getCoverPreviewOptions, getAllColorCombinations, CoverGenerationOptions } from './gemini-cover';
 import { generateCoverImageOpenAI } from './openai-cover';
 
-export type CoverModel = 'gemini' | 'openai';
+export type CoverModel = 'gemini' | 'gemini-pro' | 'openai';
 
 export interface CoverOptions {
   heroName?: string;
@@ -66,12 +66,16 @@ export async function generateCover(articleId: string, template: string, options
     articleContent: content,
   };
 
-  // Generate cover with the selected model (default: Gemini Nano Banana)
-  const model: CoverModel = options?.model === 'openai' ? 'openai' : 'gemini';
+  // Generate cover with the selected model (default: Gemini Nano Banana 2)
+  const model: CoverModel =
+    options?.model === 'openai' ? 'openai' :
+    options?.model === 'gemini-pro' ? 'gemini-pro' :
+    'gemini';
   console.log(`🧠 Cover model: ${model}`);
-  const result = model === 'openai'
-    ? await generateCoverImageOpenAI(generationOptions)
-    : await generateCoverImage(generationOptions);
+  const result =
+    model === 'openai' ? await generateCoverImageOpenAI(generationOptions) :
+    model === 'gemini-pro' ? await generateCoverImageGeminiPro(generationOptions) :
+    await generateCoverImage(generationOptions);
 
   if (!result.success) {
     console.error('❌ Cover generation failed:', result.error);

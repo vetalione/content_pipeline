@@ -41,9 +41,9 @@ export default function CoverView({ articleId, celebrityName, coverImages = [], 
   const [selectedColor, setSelectedColor] = useState('');
   const [customIcons, setCustomIcons] = useState('');
   const [customFact, setCustomFact] = useState('');
-  const [coverModel, setCoverModel] = useState<'gemini' | 'openai'>(() => {
+  const [coverModel, setCoverModel] = useState<'gemini' | 'gemini-pro' | 'openai'>(() => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('coverModel') : null;
-    return saved === 'openai' ? 'openai' : 'gemini';
+    return saved === 'openai' || saved === 'gemini-pro' ? saved : 'gemini';
   });
 
   useEffect(() => {
@@ -183,6 +183,17 @@ export default function CoverView({ articleId, celebrityName, coverImages = [], 
             }`}
           >
             🍌 Nano Banana (Gemini)
+          </button>
+          <button
+            type="button"
+            onClick={() => setCoverModel('gemini-pro')}
+            className={`px-3 py-1.5 text-xs font-medium transition-colors border-l border-gray-300 ${
+              coverModel === 'gemini-pro'
+                ? 'bg-amber-500 text-white'
+                : 'bg-white text-gray-700 hover:bg-gray-50'
+            }`}
+          >
+            🍌✨ Nano Banana Pro (Gemini)
           </button>
           <button
             type="button"

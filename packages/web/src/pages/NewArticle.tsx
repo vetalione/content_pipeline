@@ -36,9 +36,9 @@ export default function NewArticle() {
   }, [searchConfig]);
 
   // Cover model (shared via localStorage with CoverView)
-  const [coverModel, setCoverModel] = useState<'gemini' | 'openai'>(() => {
+  const [coverModel, setCoverModel] = useState<'gemini' | 'gemini-pro' | 'openai'>(() => {
     const saved = typeof window !== 'undefined' ? localStorage.getItem('coverModel') : null;
-    return saved === 'openai' ? 'openai' : 'gemini';
+    return saved === 'openai' || saved === 'gemini-pro' ? saved : 'gemini';
   });
   useEffect(() => {
     if (typeof window !== 'undefined') {
@@ -223,7 +223,7 @@ export default function NewArticle() {
         {/* Cover model selector */}
         <div className="mb-6">
           <label className="block text-sm font-medium mb-2">Модель для обложки</label>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <label
               className={`flex flex-col gap-1 p-3 rounded-lg border-2 cursor-pointer transition-all ${
                 coverModel === 'gemini'
@@ -243,6 +243,27 @@ export default function NewArticle() {
               </div>
               <p className="text-xs text-gray-600 ml-6">
                 Быстрее и дешевле. Оптимально для большинства обложек.
+              </p>
+            </label>
+            <label
+              className={`flex flex-col gap-1 p-3 rounded-lg border-2 cursor-pointer transition-all ${
+                coverModel === 'gemini-pro'
+                  ? 'border-primary bg-blue-50'
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+            >
+              <div className="flex items-center gap-2">
+                <input
+                  type="radio"
+                  name="coverModel"
+                  value="gemini-pro"
+                  checked={coverModel === 'gemini-pro'}
+                  onChange={() => setCoverModel('gemini-pro')}
+                />
+                <span className="font-semibold">🍌✨ Nano Banana Pro (Gemini)</span>
+              </div>
+              <p className="text-xs text-gray-600 ml-6">
+                Премиум-качество для сложных композиций. Дороже и медленнее обычной Nano Banana.
               </p>
             </label>
             <label

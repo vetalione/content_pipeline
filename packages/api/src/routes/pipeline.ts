@@ -114,7 +114,7 @@ pipelineRouter.post('/:articleId/cover', async (req, res, next) => {
         colorScheme,
         icons,
         sharpFact,
-        model: model === 'openai' ? 'openai' : 'gemini',
+        model: model === 'openai' ? 'openai' : model === 'gemini-pro' ? 'gemini-pro' : 'gemini',
       }
     });
     

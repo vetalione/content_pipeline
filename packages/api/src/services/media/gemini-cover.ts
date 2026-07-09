@@ -238,9 +238,14 @@ export function buildCoverPrompt(options: CoverGenerationOptions): {
 }
 
 /**
- * Generate cover image using gemini-3-pro-image via REST API (best quality + Russian support)
+ * Generate cover image via the Gemini generateContent REST API (Nano Banana family).
+ * Defaults to gemini-3.1-flash-image-preview (Nano Banana 2); pass modelName to use
+ * gemini-3-pro-image-preview (Nano Banana Pro) for higher-quality composited covers.
  */
-export async function generateCoverImage(options: CoverGenerationOptions): Promise<{
+export async function generateCoverImage(
+  options: CoverGenerationOptions,
+  modelName: string = 'gemini-3.1-flash-image-preview'
+): Promise<{
   success: boolean;
   imageBase64?: string;
   imagePath?: string;
@@ -249,11 +254,10 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
   const { prompt, sharpFact } = buildCoverPrompt(options);
 
   console.log(`🎨 Cover sharp fact: "${sharpFact}"`);
-  
-  // gemini-3.1-flash-image-preview uses generateContent (same as text models)
-  // and handles celebrity-related prompts correctly.
-  // Imagen models block photorealistic portraits of real named people.
-  console.log('🎨 Generating cover with gemini-3.1-flash-image-preview...');
+
+  // generateContent (same endpoint shape as text models) handles celebrity-related
+  // prompts correctly. Imagen models block photorealistic portraits of real named people.
+  console.log(`🎨 Generating cover with ${modelName}...`);
   console.log('📝 Prompt (first 300 chars):', prompt.substring(0, 300));
 
   try {
@@ -270,11 +274,13 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
         console.log(`🔄 Attempt ${attempt}/${maxRetries} to generate cover...`);
 
         const controller = new AbortController();
-        const timeoutId = setTimeout(() => controller.abort(), 120000); // 2 min timeout
+        // Pro is noticeably slower than Flash, give it more room before aborting.
+        const timeoutMs = modelName.includes('pro') ? 180000 : 120000;
+        const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
-        // gemini-3.1-flash-image-preview: generateContent with responseModalities IMAGE
+        // generateContent with responseModalities IMAGE
         const response = await fetch(
-          `https://generativelanguage.googleapis.com/v1beta/models/gemini-3.1-flash-image-preview:generateContent`,
+          `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent`,
           {
             method: 'POST',
             headers: {
@@ -377,6 +383,14 @@ export async function generateCoverImage(options: CoverGenerationOptions): Promi
       error: error.message || 'Failed to generate cover image',
     };
   }
+}
+
+/**
+ * Generate cover image using gemini-3-pro-image-preview (Nano Banana Pro) — same prompt
+ * and pipeline as generateCoverImage, but the premium-quality model for complex composites.
+ */
+export async function generateCoverImageGeminiPro(options: CoverGenerationOptions) {
+  return generateCoverImage(options, 'gemini-3-pro-image-preview');
 }
 
 /**
