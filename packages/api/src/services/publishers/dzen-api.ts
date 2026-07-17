@@ -493,6 +493,19 @@ async function buildBlocks(
   // 5. Conclusion
   if (content.conclusion) {
     blocks.push(block('header-two', content.conclusion.heading));
+    if ((content as any).conclusionImageUrl) {
+      try {
+        await sleep(500);
+        const imgId = await uploadImage(
+          cookieHeader, csrfToken, publicationId,
+          (content as any).conclusionImageUrl,
+          'conclusion.jpg'
+        );
+        blocks.push(block('atomic:image', '', { image: { id: imgId } }));
+      } catch (err: any) {
+        console.error('   ⚠️ Conclusion image failed:', err.message);
+      }
+    }
     blocks.push(block('unstyled', content.conclusion.text));
   }
 
@@ -504,6 +517,19 @@ async function buildBlocks(
   // 7. Bonus fact
   if (content.bonusFact) {
     blocks.push(block('header-two', '🎁 Бонусный факт:'));
+    if ((content as any).bonusFactImageUrl) {
+      try {
+        await sleep(500);
+        const imgId = await uploadImage(
+          cookieHeader, csrfToken, publicationId,
+          (content as any).bonusFactImageUrl,
+          'bonus-fact.jpg'
+        );
+        blocks.push(block('atomic:image', '', { image: { id: imgId } }));
+      } catch (err: any) {
+        console.error('   ⚠️ Bonus fact image failed:', err.message);
+      }
+    }
     blocks.push(block('unstyled', content.bonusFact));
   }
 

@@ -695,6 +695,140 @@ articlesRouter.post('/:id/facts/:factId/set-image', async (req, res, next) => {
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Block images: illustration for the "Успех" (conclusion) and "Бонусный факт"
+// blocks of the generated article. blockKey: 'conclusion' | 'bonus'.
+// Image is stored at content.conclusionImageUrl / content.bonusFactImageUrl.
+// ─────────────────────────────────────────────────────────────────────────────
+
+const BLOCK_IMAGE_FIELD: Record<string, string> = {
+  conclusion: 'conclusionImageUrl',
+  bonus: 'bonusFactImageUrl',
+};
+
+articlesRouter.post('/:id/blocks/:blockKey/find-image', async (req, res, next) => {
+  try {
+    const { id: articleId, blockKey } = req.params;
+    const field = BLOCK_IMAGE_FIELD[blockKey];
+    if (!field) {
+      return res.status(400).json({ success: false, message: `Unknown block: ${blockKey}` });
+    }
+
+    const { useGoogle = true, useBrave = true, usePerplexity = true, useOpenAI = false, confidenceThreshold = 70, resultsPerSource = 5 } = req.body || {};
+
+    const article = await prisma.article.findUnique({ where: { id: articleId } });
+    if (!article || !article.content) {
+      return res.status(404).json({ success: false, message: 'Article or content not found' });
+    }
+
+    const content = article.content as any;
+    const researchData = article.researchData as any;
+
+    // Build the visual description per block
+    let visualSuggestion: string;
+    let year: number | undefined;
+    if (blockKey === 'conclusion') {
+      const conclusionText = String(
+        (typeof content.conclusion === 'object' ? content.conclusion?.text : content.conclusion) || ''
+      ).substring(0, 200);
+      // Success block: the hero at their peak — confident, celebrated, recent
+      visualSuggestion = `${article.celebrityName} at the peak of success: smiling or confident, at an award ceremony, premiere or public triumph, recent years, high-quality photo. ${conclusionText}`;
+    } else {
+      const bonusText = String(content.bonusFact || '').substring(0, 250);
+      if (!bonusText) {
+        return res.status(400).json({ success: false, message: 'Article has no bonus fact' });
+      }
+      visualSuggestion = `${article.celebrityName}. ${bonusText}`;
+      const yearMatch = bonusText.match(/\b(18|19|20)\d{2}\b/);
+      if (yearMatch) year = parseInt(yearMatch[0], 10);
+    }
+
+    // Exclude everything already used in the article
+    const usedPaths: string[] = [];
+    for (const s of content.sections || []) {
+      if (s?.imageUrl) usedPaths.push(String(s.imageUrl));
+    }
+    for (const f of researchData?.facts || []) {
+      if (f?.imageUrl) usedPaths.push(String(f.imageUrl));
+    }
+    for (const f of Object.values(BLOCK_IMAGE_FIELD)) {
+      if (content[f]) usedPaths.push(String(content[f]));
+    }
+
+    console.log(`🔍 Finding image for block "${blockKey}" of ${article.celebrityName}`);
+
+    let blockCandidates: ScoredImageCandidate[] = [];
+    const imageUrl = await findFactImage(
+      article.celebrityName,
+      blockKey === 'conclusion' ? 'success triumph' : 'bonus fact',
+      year,
+      visualSuggestion,
+      undefined,
+      {
+        useGoogle, useBrave, usePerplexity, useOpenAI, confidenceThreshold, resultsPerSource,
+        excludeLocalPaths: usedPaths,
+        onCandidates: (cands) => { blockCandidates = cands; },
+      }
+    );
+
+    if (!imageUrl) {
+      return res.status(200).json({
+        success: false,
+        message: 'No suitable image found',
+        data: { blockKey, candidates: blockCandidates }
+      });
+    }
+
+    content[field] = imageUrl;
+    await prisma.article.update({
+      where: { id: articleId },
+      data: { content: content as any, updatedAt: new Date() }
+    });
+
+    console.log(`✅ Found and saved image for block "${blockKey}": ${imageUrl}`);
+    res.json({ success: true, data: { blockKey, imageUrl, candidates: blockCandidates } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Manually set an image for a block (candidate-pick gallery)
+articlesRouter.post('/:id/blocks/:blockKey/set-image', async (req, res, next) => {
+  try {
+    const { id: articleId, blockKey } = req.params;
+    const field = BLOCK_IMAGE_FIELD[blockKey];
+    if (!field) {
+      return res.status(400).json({ success: false, message: `Unknown block: ${blockKey}` });
+    }
+
+    const { imageUrl, thumbnailUrl } = req.body || {};
+    if (!imageUrl || typeof imageUrl !== 'string') {
+      return res.status(400).json({ success: false, message: 'imageUrl is required' });
+    }
+
+    const article = await prisma.article.findUnique({ where: { id: articleId } });
+    if (!article || !article.content) {
+      return res.status(404).json({ success: false, message: 'Article or content not found' });
+    }
+
+    const content = article.content as any;
+    const finalUrl = imageUrl.startsWith('/images/')
+      ? imageUrl
+      : await downloadAndCacheImage(imageUrl, thumbnailUrl);
+
+    content[field] = finalUrl;
+    await prisma.article.update({
+      where: { id: articleId },
+      data: { content: content as any, updatedAt: new Date() }
+    });
+
+    console.log(`✅ Manually set image for block "${blockKey}": ${finalUrl}`);
+    res.json({ success: true, data: { blockKey, imageUrl: finalUrl } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Update a quote
 articlesRouter.put('/:id/quotes/:quoteId', async (req, res, next) => {
   try {

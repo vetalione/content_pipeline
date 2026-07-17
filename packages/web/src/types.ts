@@ -111,6 +111,10 @@ export interface ArticleContent {
   cta: string;
   brandEnding: string;
   generatedAt?: Date;
+
+  // Illustrations for the "Успех" (conclusion) and "Бонусный факт" blocks
+  conclusionImageUrl?: string;
+  bonusFactImageUrl?: string;
   
   // Legacy fields for backwards compatibility
   subtitle?: string;

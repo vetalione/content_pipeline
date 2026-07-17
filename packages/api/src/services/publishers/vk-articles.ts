@@ -579,7 +579,8 @@ function generateSlug(title: string): string {
 function buildArticleBlocks(
   content: ArticleContent,
   coverMediaId: string | null,
-  sectionMediaIds: Map<number, string>
+  sectionMediaIds: Map<number, string>,
+  blockMediaIds: Map<string, string> = new Map()
 ): VkBlock[] {
   const blocks: VkBlock[] = [];
   const title = content.title || 'Untitled';
@@ -631,6 +632,10 @@ function buildArticleBlocks(
       lines: [{ text: content.conclusion.heading || 'Итог' }],
       children: [],
     });
+    const conclusionMediaId = blockMediaIds.get('conclusion');
+    if (conclusionMediaId) {
+      blocks.push({ type: 101, lines: [{ text: '' }], children: [], mediaId: conclusionMediaId });
+    }
     blocks.push({ type: 1, lines: [{ text: content.conclusion.text }], children: [] });
   }
 
@@ -653,6 +658,10 @@ function buildArticleBlocks(
   // Bonus fact
   if (content.bonusFact) {
     blocks.push({ type: 4, lines: [{ text: '🎁 Бонусный факт:' }], children: [] });
+    const bonusMediaId = blockMediaIds.get('bonus');
+    if (bonusMediaId) {
+      blocks.push({ type: 101, lines: [{ text: '' }], children: [], mediaId: bonusMediaId });
+    }
     blocks.push({ type: 1, lines: [{ text: content.bonusFact }], children: [] });
   }
 
@@ -817,8 +826,22 @@ export async function publishVkArticle(
     }
   }
 
+  // 4b. Upload block images (Успех / Бонусный факт)
+  const blockMediaIds = new Map<string, string>();
+  for (const [key, url] of [
+    ['conclusion', (content as any).conclusionImageUrl],
+    ['bonus', (content as any).bonusFactImageUrl],
+  ] as Array<[string, string | undefined]>) {
+    if (url) {
+      console.log(`🖼️  Uploading ${key} block image...`);
+      const mediaId = await uploadArticlePhoto(url, editor.photoUploadUrl, activeCookieHeader);
+      if (mediaId) blockMediaIds.set(key, mediaId);
+      await sleep(500);
+    }
+  }
+
   // 5. Build article blocks
-  const blocks = buildArticleBlocks(content, coverMediaId, sectionMediaIds);
+  const blocks = buildArticleBlocks(content, coverMediaId, sectionMediaIds, blockMediaIds);
   console.log(`📝 Built ${blocks.length} article blocks`);
 
   // 6. Create article (article_id=0 → VK returns new ID)

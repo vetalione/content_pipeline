@@ -189,8 +189,64 @@ export async function runAutopilot(
       
       const sectionsWithImages = sections.filter((s: any) => s.imageUrl).length;
       console.log(`📸 Found images for ${sectionsWithImages}/${sections.length} sections`);
+
+      // ── Block images: "Успех" (conclusion) and "Бонусный факт" ────────────
+      emit('images', 78, 'Подбираем изображения для блоков «Успех» и «Бонус»...');
+
+      const conclusionText = String(
+        (typeof content?.conclusion === 'object' ? content?.conclusion?.text : content?.conclusion) || ''
+      ).substring(0, 200);
+
+      const blockJobs: Array<{ key: 'conclusionImageUrl' | 'bonusFactImageUrl'; title: string; suggestion: string; year?: number }> = [
+        {
+          key: 'conclusionImageUrl',
+          title: 'success triumph',
+          suggestion: `${article.celebrityName} at the peak of success: smiling or confident, at an award ceremony, premiere or public triumph, recent years, high-quality photo. ${conclusionText}`,
+        },
+      ];
+      const bonusText = String(content?.bonusFact || '').substring(0, 250);
+      if (bonusText) {
+        const yearMatch = bonusText.match(/\b(18|19|20)\d{2}\b/);
+        blockJobs.push({
+          key: 'bonusFactImageUrl',
+          title: 'bonus fact',
+          suggestion: `${article.celebrityName}. ${bonusText}`,
+          year: yearMatch ? parseInt(yearMatch[0], 10) : undefined,
+        });
+      }
+
+      for (const job of blockJobs) {
+        try {
+          const imageUrl = await findFactImage(
+            article.celebrityName,
+            job.title,
+            job.year,
+            job.suggestion,
+            undefined,
+            {
+              confidenceThreshold: 65,
+              resultsPerSource: 5,
+              excludeLocalPaths: usedImageUrls,
+            }
+          );
+          if (imageUrl) {
+            usedImageUrls.push(imageUrl);
+            (content as any)[job.key] = imageUrl;
+            await prisma.article.update({
+              where: { id: articleId },
+              data: { content: { ...content, sections } }
+            });
+            console.log(`📸 Block image set: ${job.key} → ${imageUrl}`);
+          } else {
+            console.log(`ℹ️ No image cleared the floor for block ${job.key}`);
+          }
+          await new Promise(r => setTimeout(r, 3000));
+        } catch (blockImgError) {
+          console.error(`Failed to find image for block ${job.key}:`, blockImgError);
+        }
+      }
     }
-    
+
     emit('images', 80, 'Изображения подобраны');
 
     // ============ STAGE 4: GENERATE COVER ============

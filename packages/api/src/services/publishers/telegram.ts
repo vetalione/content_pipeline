@@ -282,6 +282,12 @@ export async function buildTelegraphContent(
   if (content.conclusion) {
     nodes.push({ tag: 'hr' });
     nodes.push({ tag: 'h4', children: [content.conclusion.heading] });
+    if ((content as any).conclusionImageUrl) {
+      const imgUrl = await getImageForTelegraph((content as any).conclusionImageUrl);
+      if (imgUrl) {
+        nodes.push({ tag: 'img', attrs: { src: imgUrl } });
+      }
+    }
     nodes.push({ tag: 'p', children: [content.conclusion.text] });
   }
 
@@ -296,6 +302,12 @@ export async function buildTelegraphContent(
   // Bonus fact
   if (content.bonusFact) {
     nodes.push({ tag: 'h4', children: ['🎁 Бонусный факт:'] });
+    if ((content as any).bonusFactImageUrl) {
+      const imgUrl = await getImageForTelegraph((content as any).bonusFactImageUrl);
+      if (imgUrl) {
+        nodes.push({ tag: 'img', attrs: { src: imgUrl } });
+      }
+    }
     nodes.push({ tag: 'p', children: [content.bonusFact] });
   }
 
