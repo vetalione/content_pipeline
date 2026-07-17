@@ -77,8 +77,17 @@ export async function runAutopilot(
     if (sections.length > 0) {
       const { findFactImage } = await import('../media/google-images');
       
-      // Track already used images to avoid duplicates
+      // Track already used images to avoid duplicates.
+      // Seed with images already assigned to research facts and any existing
+      // section images — same rule as the manual re-pick routes, so autopilot
+      // can't assign a section the photo a fact is already displaying.
       const usedImageUrls: string[] = [];
+      for (const f of facts) {
+        if (f?.imageUrl && !f.isDeleted) usedImageUrls.push(String(f.imageUrl));
+      }
+      for (const s of sections) {
+        if (s?.imageUrl) usedImageUrls.push(String(s.imageUrl));
+      }
       
       for (let i = 0; i < sections.length; i++) {
         const section = sections[i];
@@ -112,12 +121,28 @@ export async function runAutopilot(
             }
           }
           
-          // Build visual suggestion from fact or section context
-          const visualSuggestion = matchingFact?.visualSuggestion || 
-            `${article.celebrityName} - ${sectionTitle}`;
-          
-          // Extract year from fact or section
-          const year = matchingFact?.year || section.year || '';
+          // Build visual suggestion from fact or section context.
+          // When no fact matched, a bare "Name - heading" collapses the query
+          // builder to a near-generic query — every such section then gets the
+          // SAME candidate pool, which all dedup away and the section stays
+          // empty. The section's first paragraph carries the concrete
+          // ages/places/events needed for a distinctive query, so feed it in.
+          let visualSuggestion = matchingFact?.visualSuggestion;
+          if (!visualSuggestion) {
+            const paragraph = String(section.paragraph1 || section.content || '').substring(0, 300);
+            visualSuggestion = paragraph
+              ? `${article.celebrityName}. ${sectionTitle}. ${paragraph}`
+              : `${article.celebrityName} - ${sectionTitle}`;
+            console.log(`  ℹ️ Section ${i + 1}: no matched fact — using paragraph-based visual suggestion`);
+          }
+
+          // Extract year from fact, section, or the section text itself
+          // (headings like "В 1923 году студия умерла" carry the year).
+          let year: number | undefined = Number(matchingFact?.year || section.year) || undefined;
+          if (!year) {
+            const yearMatch = `${sectionTitle} ${section.paragraph1 ?? ''}`.match(/\b(18|19|20)\d{2}\b/);
+            if (yearMatch) year = parseInt(yearMatch[0], 10);
+          }
           
           const imageUrl = await findFactImage(
             article.celebrityName,

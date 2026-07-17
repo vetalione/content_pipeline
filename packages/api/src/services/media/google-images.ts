@@ -53,6 +53,7 @@
 
 import path from 'path';
 import crypto from 'crypto';
+import sharp from 'sharp';
 import { promises as fs } from 'fs';
 import { batchValidateImages } from './gemini-image-validator';
 import { searchBraveImages } from './brave-images';
@@ -943,6 +944,11 @@ export async function findFactImage(
     const key = c.originalUrl.toLowerCase();
     if (seen.has(key)) continue;
     if (excludedUrlSet.has(key)) { skipped++; continue; }
+    // A URL we already downloaded earlier (this article or this process) that
+    // resolved to an already-used local file — drop it BEFORE it wastes a
+    // Gemini validation slot and possibly wins the batch as a duplicate.
+    const knownLocal = urlToLocalCache.get(key);
+    if (knownLocal && excludedLocalSet.has(knownLocal.toLowerCase())) { skipped++; continue; }
     if (isLikelyCollage(c.originalUrl)) { skipped++; continue; }
     seen.add(key);
     unique.push(c);
@@ -983,10 +989,48 @@ export async function findFactImage(
   // fall through to the next-best candidate instead of giving up).
   type Scored = { c: ImageCandidate; conf: number };
   const scored: Scored[] = [];
-  let bestConf = 0;
-  let earlyExit = false;
+  // Candidates that already failed selection (download error / duplicate) —
+  // never re-tried on later selection attempts.
+  const rejectedKeys = new Set<string>();
+  let winner: string | null = null;
+  let winnerConf = 0;
 
-  for (let i = 0; i < toValidate.length && !earlyExit; i += 4) {
+  // Walk validated candidates best → worst; return the first that downloads,
+  // isn't a duplicate (exact path OR visual dHash match), and clears the
+  // quality floor. Called after any promising batch AND once at the end — so
+  // a duplicate top pick keeps the search alive instead of killing it.
+  const attemptSelection = async (): Promise<string | null> => {
+    const ranked = [...scored].sort((a, b) => (b.conf - a.conf) || (b.c.metadataScore - a.c.metadataScore));
+    for (const { c, conf } of ranked) {
+      if (conf < minAcceptableConfidence) break; // ranked desc — everything after is worse
+      const key = c.originalUrl.toLowerCase();
+      if (rejectedKeys.has(key)) continue;
+      if (excludedUrlSet.has(key)) { rejectedKeys.add(key); continue; }
+      const localPath = await downloadAndCacheImage(c.originalUrl, c.thumbnailUrl);
+      if (!localPath.startsWith('/images/')) {
+        // Download failed entirely (raw URL returned) — a hotlink-protected
+        // image would render unreliably in the article anyway. Skip it.
+        console.log(`  ⏭️  Unfetchable (hotlink-protected?), skipping: ${c.originalUrl.substring(0, 70)}`);
+        rejectedKeys.add(key);
+        continue;
+      }
+      if (excludedLocalSet.has(localPath.toLowerCase()) || excludedUrlSet.has(localPath.toLowerCase())) {
+        console.log(`  ⏭️  Downloaded image already used (dup, conf=${conf}%): ${localPath}`);
+        rejectedKeys.add(key);
+        continue;
+      }
+      if (await isVisualDuplicate(localPath, excludeLocalPaths)) {
+        console.log(`  ⏭️  Visually identical to an already-used image (dHash, conf=${conf}%): ${localPath}`);
+        rejectedKeys.add(key);
+        continue;
+      }
+      winnerConf = conf;
+      return localPath;
+    }
+    return null;
+  };
+
+  for (let i = 0; i < toValidate.length && !winner; i += 4) {
     const batch = toValidate.slice(i, i + 4);
     const batchResult = await batchValidateImages(batch, celebrityName, description, factYear, built?.era ?? 'photography');
     if (!batchResult) continue;
@@ -1007,13 +1051,18 @@ export async function findFactImage(
       scored.push({ c: batch[batchResult.bestIndex], conf: batchResult.confidence });
     }
 
-    if (batchResult.confidence > bestConf) bestConf = batchResult.confidence;
-
     if (batchResult.confidence >= confidenceThreshold) {
-      console.log(`  🎯 Early exit: ${batchResult.confidence}% ≥ threshold ${confidenceThreshold}%`);
-      earlyExit = true;
+      console.log(`  🎯 Promising batch (${batchResult.confidence}% ≥ ${confidenceThreshold}%) — attempting selection`);
+      // If the top pick turns out to be a duplicate or unfetchable, winner
+      // stays null and the loop CONTINUES validating the remaining batches —
+      // the old early-exit here abandoned them and left sections empty.
+      winner = await attemptSelection();
     }
   }
+
+  // Final pass over everything validated (no-early-exit runs, and runs where
+  // later batches added viable candidates after a failed early attempt).
+  if (!winner) winner = await attemptSelection();
 
   // Rank by Gemini confidence (desc), tiebreak by metadata score (desc)
   scored.sort((a, b) => (b.conf - a.conf) || (b.c.metadataScore - a.c.metadataScore));
@@ -1036,36 +1085,116 @@ export async function findFactImage(
     );
   }
 
-  // Walk best → worst, but NEVER below the quality floor.
-  // Previously this loop accepted the first non-duplicate at ANY confidence
-  // (even 0%) — that is exactly how irrelevant photos ended up in articles,
-  // and why every "re-pick" click made things worse (used images excluded →
-  // fall through to progressively worse candidates).
-  for (const { c, conf } of scored) {
-    if (conf < minAcceptableConfidence) {
-      console.log(`  🚫 Below quality floor (${conf}% < ${minAcceptableConfidence}%) — stopping. Better no image than a wrong one.`);
-      break; // scored is sorted desc — everything after is worse
-    }
-    if (excludedUrlSet.has(c.originalUrl.toLowerCase())) {
-      console.log(`  ⏭️  URL already used (dup): ${c.originalUrl.substring(0, 70)}`);
-      continue;
-    }
-    const localPath = await downloadAndCacheImage(c.originalUrl, c.thumbnailUrl);
-    if (!localPath) continue;
-    if (excludedLocalSet.has(localPath.toLowerCase()) || excludedUrlSet.has(localPath.toLowerCase())) {
-      console.log(`  ⏭️  Downloaded image already used (dup, conf=${conf}%): ${localPath}`);
-      continue;
-    }
-    console.log(`  ✅ Selected (conf=${conf}%): ${localPath}`);
-    if (onProgress) onProgress({ stage: 'found', current: toValidate.length, total: toValidate.length, confidence: conf });
-    return localPath;
+  if (winner) {
+    console.log(`  ✅ Selected (conf=${winnerConf}%): ${winner}`);
+    if (onProgress) onProgress({ stage: 'found', current: toValidate.length, total: toValidate.length, confidence: winnerConf });
+    return winner;
   }
 
   // NOTE: the old "metadata-ordered fallback" (pick ANY unvalidated candidate
   // by domain score) was removed deliberately — it inserted images Gemini
   // never approved and was a major source of irrelevant photos.
-  console.log(`  ❌ No candidate reached the ${minAcceptableConfidence}% quality floor — returning no image`);
+  console.log(`  ❌ No usable candidate: ${scored.length} validated, ${rejectedKeys.size} rejected (duplicates/unfetchable), quality floor ${minAcceptableConfidence}% — returning no image`);
   return null;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Cross-call dedup caches (persist for the process lifetime)
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * originalUrl (lowercase) → local cached path.
+ * Lets findFactImage drop a candidate BEFORE Gemini validation when the same
+ * web URL was already downloaded for a previous fact/section of this article.
+ * Without this, an already-used image wastes a validation slot, wins the
+ * batch, gets rejected as a duplicate after download — and the search dies
+ * with a tiny leftover pool (the "empty sections 3-4 after autopilot" bug).
+ */
+const urlToLocalCache = new Map<string, string>();
+
+/** local path → 64-bit dHash (null = could not be computed) */
+const dhashCache = new Map<string, bigint | null>();
+
+const CACHE_MAX_ENTRIES = 2000;
+
+function boundedSet<K, V>(map: Map<K, V>, key: K, value: V): void {
+  if (map.size >= CACHE_MAX_ENTRIES) {
+    const first = map.keys().next().value;
+    if (first !== undefined) map.delete(first);
+  }
+  map.set(key, value);
+}
+
+/**
+ * Difference hash (dHash): grayscale 9×8, compare horizontal neighbors → 64 bits.
+ * Robust to recompression, resizing and small crops — exactly the "same Jim
+ * Carrey photo from two different sites" case that byte-level SHA misses.
+ */
+async function computeDHash(buf: Buffer): Promise<bigint | null> {
+  try {
+    const { data } = await sharp(buf)
+      .grayscale()
+      .resize(9, 8, { fit: 'fill' })
+      .raw()
+      .toBuffer({ resolveWithObject: true });
+    let hash = 0n;
+    for (let y = 0; y < 8; y++) {
+      for (let x = 0; x < 8; x++) {
+        hash = (hash << 1n) | (data[y * 9 + x] > data[y * 9 + x + 1] ? 1n : 0n);
+      }
+    }
+    return hash;
+  } catch {
+    return null;
+  }
+}
+
+function hammingDistance64(a: bigint, b: bigint): number {
+  let x = a ^ b;
+  let count = 0;
+  while (x) {
+    count += Number(x & 1n);
+    x >>= 1n;
+  }
+  return count;
+}
+
+/** Hashes within this Hamming distance (of 64 bits) are treated as the same photo. */
+const DHASH_DUP_THRESHOLD = 8;
+
+async function getDHash(localPath: string): Promise<bigint | null> {
+  const cached = dhashCache.get(localPath);
+  if (cached !== undefined) return cached;
+  let hash: bigint | null = null;
+  // Only local cached files can be hashed; raw URLs (failed downloads) are skipped
+  if (localPath.startsWith('/images/')) {
+    try {
+      const storageBase = process.env.STORAGE_PATH || process.cwd();
+      const buf = await fs.readFile(path.join(storageBase, localPath.slice(1)));
+      hash = await computeDHash(buf);
+    } catch {
+      hash = null;
+    }
+  }
+  boundedSet(dhashCache, localPath, hash);
+  return hash;
+}
+
+/**
+ * True when the candidate image is visually identical (perceptual dHash) to
+ * any already-used image in this article. Catches the same photo re-served
+ * by different sources with different bytes/resolution/compression.
+ */
+async function isVisualDuplicate(candidatePath: string, usedPaths: string[]): Promise<boolean> {
+  if (usedPaths.length === 0) return false;
+  const candHash = await getDHash(candidatePath);
+  if (candHash === null) return false;
+  for (const used of usedPaths) {
+    const usedHash = await getDHash(used);
+    if (usedHash === null) continue;
+    if (hammingDistance64(candHash, usedHash) <= DHASH_DUP_THRESHOLD) return true;
+  }
+  return false;
 }
 
 /**
@@ -1172,6 +1301,8 @@ export async function downloadAndCacheImage(
       await fs.mkdir(imagesDir, { recursive: true });
       const fullPath = path.join(imagesDir, fileName);
       const localPath = `/images/${fileName}`;
+
+      boundedSet(urlToLocalCache, originalUrl.toLowerCase(), localPath);
 
       try {
         await fs.access(fullPath);
