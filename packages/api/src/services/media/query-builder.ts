@@ -83,38 +83,44 @@ Return JSON only:
   "era": "<'pre_photography' if the person died before ~1850 (no photographs can exist — paintings/engravings/busts are the correct imagery), otherwise 'photography'>"
 }`;
 
-    // Retry transient failures (429/503/network). Without this, a single
-    // rate-limit hit during autopilot's back-to-back section loop dropped the
-    // query to the legacy "Name vintage photo" fallback — producing the SAME
-    // generic query (and the same candidate pool) for several sections in a row.
-    let result: Awaited<ReturnType<typeof genAI.models.generateContent>> | undefined;
+    // Retry transient failures (429/503/network) AND empty/JSON-less responses.
+    // gemini-3-flash-preview is a thinking model: its reasoning tokens count
+    // against maxOutputTokens, so a tight limit (the old 300) gets fully eaten
+    // by thoughts and .text comes back EMPTY → "No JSON" → every fact degraded
+    // to the legacy transliteration fallback ("Sokrat ... photo"). Generous
+    // limit + forced JSON mime type + retry-on-empty fix all three failure modes.
+    let parsed: any;
     const maxAttempts = 3;
     for (let attempt = 1; attempt <= maxAttempts; attempt++) {
       try {
-        result = await genAI.models.generateContent({
+        const result = await genAI.models.generateContent({
           model: 'gemini-3-flash-preview',
           contents: [{ role: 'user', parts: [{ text: prompt }] }],
-          config: { temperature: 0.1, maxOutputTokens: 300 },
+          config: {
+            temperature: 0.1,
+            maxOutputTokens: 2000,
+            responseMimeType: 'application/json',
+          },
         });
+        const text = result.text ?? '';
+        const jsonMatch = text.match(/\{[\s\S]*\}/);
+        if (!jsonMatch) {
+          throw new Error(`No JSON in query-builder response (text length=${text.length})`);
+        }
+        parsed = JSON.parse(jsonMatch[0]);
         break;
       } catch (err: any) {
         const msg = String(err?.message ?? err);
         const isTransient =
           msg.includes('429') || msg.includes('503') || msg.includes('RESOURCE_EXHAUSTED') ||
           msg.includes('UNAVAILABLE') || msg.includes('overloaded') ||
-          msg.includes('fetch failed') || msg.includes('timeout');
+          msg.includes('fetch failed') || msg.includes('timeout') ||
+          msg.includes('No JSON') || msg.includes('JSON');  // empty/garbled output — retry too
         if (!isTransient || attempt === maxAttempts) throw err;
         console.log(`  ⏳ Query builder transient error (attempt ${attempt}/${maxAttempts}): ${msg.substring(0, 80)} — retrying...`);
         await new Promise(r => setTimeout(r, 2000 * attempt));
       }
     }
-    if (!result) throw new Error('Query builder: no result after retries');
-
-    const text = result.text ?? '';
-    const jsonMatch = text.match(/\{[\s\S]*\}/);
-    if (!jsonMatch) throw new Error('No JSON in query-builder response');
-
-    const parsed = JSON.parse(jsonMatch[0]);
     if (!parsed.englishName || typeof parsed.englishName !== 'string') {
       throw new Error('query-builder returned no englishName');
     }
