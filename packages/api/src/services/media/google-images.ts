@@ -429,11 +429,14 @@ export async function searchGoogleImages(
   numResults: number = 3,
   personName?: string
 ): Promise<ImageCandidate[]> {
-  const apiKey = process.env.GOOGLE_API_KEY;
-  const cx = process.env.GOOGLE_CX;
+  // Trim + strip accidental quotes: a Railway variable pasted with a trailing
+  // newline, space or wrapping quotes passes the truthiness check but reaches
+  // Google as an effectively empty/garbled `key=` → 401 CREDENTIALS_MISSING.
+  const apiKey = (process.env.GOOGLE_API_KEY || '').trim().replace(/^["']|["']$/g, '');
+  const cx = (process.env.GOOGLE_CX || '').trim().replace(/^["']|["']$/g, '');
 
   if (!apiKey || !cx) {
-    console.warn('⚠️ Google Custom Search not configured (GOOGLE_API_KEY or GOOGLE_CX missing)');
+    console.warn('⚠️ Google Custom Search not configured (GOOGLE_API_KEY or GOOGLE_CX missing/empty after trim)');
     return [];
   }
 
@@ -454,7 +457,16 @@ export async function searchGoogleImages(
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(`Google Search API error: ${response.status} - ${errorText}`);
+      console.error(`Google Search API error: ${response.status} - ${errorText.substring(0, 400)}`);
+      if (response.status === 401) {
+        // CREDENTIALS_MISSING → the key never reached Google in usable form.
+        // Log a masked fingerprint so a corrupted Railway variable is visible.
+        console.error(
+          `   🔑 GOOGLE_API_KEY diagnostic: length=${apiKey.length}, ` +
+          `starts="${apiKey.substring(0, 4)}...", looksLikeGoogleKey=${/^AIza[0-9A-Za-z_-]{30,}$/.test(apiKey)}. ` +
+          `Проверь переменную GOOGLE_API_KEY в Railway: без кавычек, пробелов и переносов строки.`
+        );
+      }
       return [];
     }
 
