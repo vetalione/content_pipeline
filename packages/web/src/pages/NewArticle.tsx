@@ -112,6 +112,7 @@ export default function NewArticle() {
         try {
           await api.post(`/pipeline/${articleId}/autopilot`, {
             factSources: factConfig.sources,
+            coverModel,
           });
         } catch (error) {
           console.error('Failed to start autopilot:', error);

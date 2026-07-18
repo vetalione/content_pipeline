@@ -34,9 +34,9 @@ pipelineRouter.post('/:articleId/research', async (req, res, next) => {
 pipelineRouter.post('/:articleId/autopilot', async (req, res, next) => {
   try {
     const { articleId } = req.params;
-    const { factSources } = req.body || {};
-    
-    console.log(`🚀 Starting AUTOPILOT for article ${articleId}, sources:`, factSources);
+    const { factSources, coverModel } = req.body || {};
+
+    console.log(`🚀 Starting AUTOPILOT for article ${articleId}, sources:`, factSources, `cover: ${coverModel || 'gemini'}`);
     
     // Update article status
     await prisma.article.update({
@@ -51,6 +51,7 @@ pipelineRouter.post('/:articleId/autopilot', async (req, res, next) => {
       articleId,
       startedAt: new Date().toISOString(),
       factSources,
+      coverModel,
     });
     
     res.json({

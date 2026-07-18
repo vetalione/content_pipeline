@@ -13,7 +13,10 @@ export async function generateCoverImageOpenAI(options: CoverGenerationOptions):
   imagePath?: string;
   error?: string;
 }> {
-  const { prompt, sharpFact } = buildCoverPrompt(options);
+  // 'illustration' variant: explicitly stylized/painted, not photorealistic —
+  // OpenAI's safety system blocks photorealistic depictions of real public
+  // figures ("public-figure" category) far more often than artistic ones.
+  const { prompt, sharpFact } = buildCoverPrompt(options, 'illustration');
 
   console.log(`🎨 [OpenAI] Cover sharp fact: "${sharpFact}"`);
   console.log('🎨 Generating cover with gpt-image-2...');

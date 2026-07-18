@@ -198,9 +198,17 @@ function getRandomColors(): string {
 
 /**
  * Build the cover generation prompt. Exported so alternative providers
- * (OpenAI gpt-image-1, etc.) can reuse the exact same specification.
+ * (OpenAI gpt-image, etc.) can reuse the exact same specification.
+ *
+ * variant:
+ *  - 'photoreal' (default, Gemini) — realistic photo-collage style
+ *  - 'illustration' (OpenAI) — explicitly stylized/painted, NOT photorealistic.
+ *    OpenAI's safety system blocks photorealistic depictions of real public
+ *    figures far more often than clearly artistic ones; asking for an
+ *    illustration keeps the same composition while passing moderation more
+ *    reliably.
  */
-export function buildCoverPrompt(options: CoverGenerationOptions): {
+export function buildCoverPrompt(options: CoverGenerationOptions, variant: 'photoreal' | 'illustration' = 'photoreal'): {
   prompt: string;
   heroName: string;
   title: string;
@@ -221,16 +229,26 @@ export function buildCoverPrompt(options: CoverGenerationOptions): {
 
   const iconsText = icons.join(', ');
 
+  const styleLine = variant === 'illustration'
+    ? 'Stylized editorial illustration collage — hand-painted artwork, clearly artistic and NOT photorealistic — with dramatic, inspiring visual impact'
+    : 'Realistic photo collage editorial cover art with dramatic, inspiring visual impact';
+  const portraitLine = variant === 'illustration'
+    ? `Dignified stylized painted portrait of ${heroName} in their prime — a respectful artistic illustration, clearly an artwork rather than a photograph — presented as a torn-edge paper collage cutout layered on top of the chalkboard with a subtle drop shadow, confident and inspiring expression, direct eye contact with viewer`
+    : `Dignified editorial-style illustrated portrait of ${heroName} in their prime, presented as a torn-edge paper collage cutout layered on top of the chalkboard with a subtle drop shadow, confident and inspiring expression, direct eye contact with viewer`;
+  const finalStyleLine = variant === 'illustration'
+    ? 'Cohesive illustrated artwork on aged chalkboard, magazine-cover quality'
+    : 'Blend of photography and chalk illustration on aged chalkboard, magazine-cover quality';
+
   const prompt = `Editorial cover illustration for a motivational biography feature (in the style of Forbes/Time "comeback story" profiles) celebrating ${heroName}'s resilience, perseverance and rise to success. Tone: respectful, uplifting, inspirational — this is a tribute to how they overcame adversity on the way to achievement, not a negative, mocking, or sensational depiction. Design specifications:
-- Style: Realistic photo collage editorial cover art with dramatic, inspiring visual impact
-- Central element: Dignified editorial-style illustrated portrait of ${heroName} in their prime, presented as a torn-edge paper collage cutout layered on top of the chalkboard with a subtle drop shadow, confident and inspiring expression, direct eye contact with viewer
+- Style: ${styleLine}
+- Central element: ${portraitLine}
 - Background: Dark, textured chalkboard with chalk scratches and artistic marks
 - Visual accent: Vibrant ${colorScheme} cloud/aura effect behind the figure using chalk/pastel style, evoking triumph and energy
 - Icons: Include ${iconsText} as chalk-drawn elements celebrating ${heroName}'s achievements
 - Text elements:
   * Title at top in chalk font: "${title}"
   * Arrow pointing to figure with a short annotation naming the obstacle they overcame on their path to success: "${sharpFact}"
-- Final style: Blend of photography and chalk illustration on aged chalkboard, magazine-cover quality
+- Final style: ${finalStyleLine}
 - Quality: Sharp, legible text and diagrams, professional finish
 - Aspect ratio: 16:9, resolution: 4K`;
 

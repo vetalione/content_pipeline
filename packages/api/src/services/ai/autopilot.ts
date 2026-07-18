@@ -14,7 +14,8 @@ type ProgressCallback = (stage: string, progress: number, message: string) => vo
 export async function runAutopilot(
   articleId: string,
   onProgress?: ProgressCallback,
-  factSources?: any
+  factSources?: any,
+  coverModel?: 'gemini' | 'gemini-pro' | 'openai'
 ): Promise<{ success: boolean; error?: string }> {
   
   const emit = (stage: string, progress: number, message: string) => {
@@ -258,7 +259,7 @@ export async function runAutopilot(
     });
 
     const { generateCover } = await import('../media/cover');
-    await generateCover(articleId, 'celebrity');
+    await generateCover(articleId, 'celebrity', coverModel ? { model: coverModel } : undefined);
     
     emit('cover', 95, 'Обложка сгенерирована');
 

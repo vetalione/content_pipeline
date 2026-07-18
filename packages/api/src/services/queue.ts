@@ -114,9 +114,9 @@ publishWorker.on('failed', (job, err) => {
 
 // Autopilot Worker - runs full pipeline automatically
 const autopilotWorker = new Worker('autopilot', async (job) => {
-  const { articleId, factSources } = job.data;
-  console.log(`🚀 Starting AUTOPILOT for article ${articleId}, sources:`, factSources);
-  
+  const { articleId, factSources, coverModel } = job.data;
+  console.log(`🚀 Starting AUTOPILOT for article ${articleId}, sources:`, factSources, `cover: ${coverModel || 'gemini'}`);
+
   try {
     const { runAutopilot } = await import('./ai/autopilot');
     const result = await runAutopilot(articleId, (stage, progress, message) => {
@@ -128,7 +128,7 @@ const autopilotWorker = new Worker('autopilot', async (job) => {
       } catch (e) {
         console.log(`Autopilot progress: ${stage} - ${progress}% - ${message}`);
       }
-    }, factSources);
+    }, factSources, coverModel);
     
     console.log(`✅ Autopilot completed for article ${articleId}`);
     return result;

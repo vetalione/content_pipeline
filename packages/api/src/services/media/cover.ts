@@ -67,15 +67,26 @@ export async function generateCover(articleId: string, template: string, options
   };
 
   // Generate cover with the selected model (default: Gemini Nano Banana 2)
-  const model: CoverModel =
+  let model: CoverModel =
     options?.model === 'openai' ? 'openai' :
     options?.model === 'gemini-pro' ? 'gemini-pro' :
     'gemini';
   console.log(`🧠 Cover model: ${model}`);
-  const result =
+  let result =
     model === 'openai' ? await generateCoverImageOpenAI(generationOptions) :
     model === 'gemini-pro' ? await generateCoverImageGeminiPro(generationOptions) :
     await generateCoverImage(generationOptions);
+
+  // OpenAI's safety system blocks images of real public figures
+  // ("public-figure" moderation category) regardless of framing — it depends
+  // on the specific name, not the prompt tone. When that happens we make ONE
+  // clean fallback to Gemini (which handles celebrity covers) and never
+  // re-send the blocked request to OpenAI.
+  if (!result.success && model === 'openai' && String(result.error || '').includes('moderation_blocked')) {
+    console.warn('⚠️ OpenAI moderation blocked this cover (public figure). Falling back to Gemini — not retrying OpenAI.');
+    model = 'gemini';
+    result = await generateCoverImage(generationOptions);
+  }
 
   if (!result.success) {
     console.error('❌ Cover generation failed:', result.error);
