@@ -829,6 +829,134 @@ articlesRouter.post('/:id/blocks/:blockKey/set-image', async (req, res, next) =>
   }
 });
 
+// ─────────────────────────────────────────────────────────────────────────────
+// AI-drawn illustrations: draw a scene from the hero's life in the brand's
+// chalkboard-sticker style instead of searching the web for a photo.
+// ─────────────────────────────────────────────────────────────────────────────
+
+articlesRouter.post('/:id/sections/:sectionIndex/generate-image', async (req, res, next) => {
+  try {
+    const { id: articleId, sectionIndex } = req.params;
+    const sectionIdx = parseInt(sectionIndex, 10);
+    const model = req.body?.model === 'openai' ? 'openai' as const : 'gemini' as const;
+
+    const article = await prisma.article.findUnique({ where: { id: articleId } });
+    if (!article || !article.content) {
+      return res.status(404).json({ success: false, message: 'Article or content not found' });
+    }
+
+    const content = article.content as any;
+    const researchData = article.researchData as any;
+    const sections = content.sections || [];
+    if (sectionIdx < 0 || sectionIdx >= sections.length) {
+      return res.status(404).json({ success: false, message: 'Section not found' });
+    }
+
+    const section = sections[sectionIdx];
+    const sectionTitle = section.heading || section.title || `Section ${sectionIdx + 1}`;
+
+    // Same fact-matching as find-image: factId first, then title similarity
+    const facts = researchData?.facts || [];
+    let matchingFact = section.factId
+      ? facts.find((f: any) => f.id === section.factId && !f.isDeleted)
+      : null;
+    if (!matchingFact) {
+      matchingFact = facts.find((f: any) =>
+        !f.isDeleted && (
+          f.title.toLowerCase().includes(sectionTitle.toLowerCase().substring(0, 20)) ||
+          sectionTitle.toLowerCase().includes(f.title.toLowerCase().substring(0, 20))
+        )
+      );
+    }
+
+    // Scene: research visualSuggestion is ideal (rich, concrete); otherwise
+    // build from the section's own heading + paragraph
+    const sceneDescription = matchingFact?.visualSuggestion ||
+      `${sectionTitle}. ${String(section.paragraph1 || section.content || '').substring(0, 300)}`;
+    let year: number | undefined = Number(matchingFact?.year || section.year) || undefined;
+    if (!year) {
+      const yearMatch = `${sectionTitle} ${section.paragraph1 ?? ''}`.match(/\b(18|19|20)\d{2}\b/);
+      if (yearMatch) year = parseInt(yearMatch[0], 10);
+    }
+
+    console.log(`🖌 Generating illustration for section ${sectionIdx + 1} (${model})`);
+    const { generateIllustration } = await import('../services/media/illustration');
+    const result = await generateIllustration(
+      { heroName: article.celebrityName, sceneDescription, year },
+      model
+    );
+
+    if (!result.success || !result.imagePath) {
+      return res.status(200).json({ success: false, message: result.error || 'Illustration generation failed' });
+    }
+
+    sections[sectionIdx].imageUrl = result.imagePath;
+    await prisma.article.update({
+      where: { id: articleId },
+      data: { content: { ...content, sections } as any, updatedAt: new Date() }
+    });
+
+    res.json({ success: true, data: { sectionIndex: sectionIdx, imageUrl: result.imagePath, usedModel: result.usedModel } });
+  } catch (error) {
+    next(error);
+  }
+});
+
+articlesRouter.post('/:id/blocks/:blockKey/generate-image', async (req, res, next) => {
+  try {
+    const { id: articleId, blockKey } = req.params;
+    const field = BLOCK_IMAGE_FIELD[blockKey];
+    if (!field) {
+      return res.status(400).json({ success: false, message: `Unknown block: ${blockKey}` });
+    }
+    const model = req.body?.model === 'openai' ? 'openai' as const : 'gemini' as const;
+
+    const article = await prisma.article.findUnique({ where: { id: articleId } });
+    if (!article || !article.content) {
+      return res.status(404).json({ success: false, message: 'Article or content not found' });
+    }
+
+    const content = article.content as any;
+    let sceneDescription: string;
+    let year: number | undefined;
+    if (blockKey === 'conclusion') {
+      const conclusionText = String(
+        (typeof content.conclusion === 'object' ? content.conclusion?.text : content.conclusion) || ''
+      ).substring(0, 250);
+      sceneDescription = `${article.celebrityName} at the peak of success — confident, celebrated, triumphant, in the environment of their greatest achievement. ${conclusionText}`;
+    } else {
+      const bonusText = String(content.bonusFact || '').substring(0, 300);
+      if (!bonusText) {
+        return res.status(400).json({ success: false, message: 'Article has no bonus fact' });
+      }
+      sceneDescription = bonusText;
+      const yearMatch = bonusText.match(/\b(18|19|20)\d{2}\b/);
+      if (yearMatch) year = parseInt(yearMatch[0], 10);
+    }
+
+    console.log(`🖌 Generating illustration for block "${blockKey}" (${model})`);
+    const { generateIllustration } = await import('../services/media/illustration');
+    const result = await generateIllustration(
+      { heroName: article.celebrityName, sceneDescription, year },
+      model
+    );
+
+    if (!result.success || !result.imagePath) {
+      return res.status(200).json({ success: false, message: result.error || 'Illustration generation failed' });
+    }
+
+    content[field] = result.imagePath;
+    await prisma.article.update({
+      where: { id: articleId },
+      data: { content: content as any, updatedAt: new Date() }
+    });
+
+    res.json({ success: true, data: { blockKey, imageUrl: result.imagePath, usedModel: result.usedModel } });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // Update a quote
 articlesRouter.put('/:id/quotes/:quoteId', async (req, res, next) => {
   try {

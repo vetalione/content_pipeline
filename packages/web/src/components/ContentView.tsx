@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { io } from 'socket.io-client';
 import { ArticleContent, ResearchData } from '../types';
-import { Edit, ImagePlus, RefreshCw, Settings, ChevronDown, ChevronUp, Check, X } from 'lucide-react';
+import { Edit, ImagePlus, RefreshCw, Settings, ChevronDown, ChevronUp, Check, X, Wand2 } from 'lucide-react';
 import ImageSearchSettings, { ImageSearchConfig } from './ImageSearchSettings';
 
 interface Props {
@@ -294,6 +294,66 @@ export default function ContentView({ content, researchData, articleId, onUpdate
     </div>
   );
 
+  // ── AI-drawn illustrations (chalkboard-sticker style, GPT/Gemini) ─────────
+  // target: `section-${idx}` | 'conclusion' | 'bonus'
+  const [drawing, setDrawing] = useState<Record<string, boolean>>({});
+
+  const handleDrawImage = async (target: string, model: 'openai' | 'gemini') => {
+    setDrawing(prev => ({ ...prev, [target]: true }));
+    try {
+      const url = target.startsWith('section-')
+        ? `${API_URL}/api/articles/${articleId}/sections/${target.split('-')[1]}/generate-image`
+        : `${API_URL}/api/articles/${articleId}/blocks/${target}/generate-image`;
+      const response = await fetch(url, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ model })
+      });
+      const result = await response.json();
+      if (!response.ok || !result.success) {
+        throw new Error(result.message || 'Не удалось нарисовать иллюстрацию');
+      }
+      if (result.data?.usedModel && result.data.usedModel !== model) {
+        console.log(`ℹ️ ${model} отказал (модерация) — нарисовано через ${result.data.usedModel}`);
+      }
+      onUpdate?.();
+    } catch (error) {
+      console.error('Draw illustration error:', error);
+      alert(error instanceof Error ? error.message : 'Не удалось нарисовать иллюстрацию');
+    } finally {
+      setDrawing(prev => ({ ...prev, [target]: false }));
+    }
+  };
+
+  /** Two compact "draw from scratch" buttons in the brand style */
+  const renderDrawButtons = (target: string) => {
+    const isDrawing = !!drawing[target];
+    return (
+      <div className="flex items-center gap-2 mt-2">
+        <span className="text-xs text-gray-500 flex items-center gap-1">
+          <Wand2 size={14} /> Нарисовать с нуля:
+        </span>
+        <button
+          onClick={() => handleDrawImage(target, 'openai')}
+          disabled={isDrawing}
+          className="px-2.5 py-1 text-xs font-medium rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 transition disabled:opacity-50"
+          title="Нарисовать иллюстрацию через GPT (gpt-image-2) в фирменном стиле"
+        >
+          {isDrawing ? '…' : 'GPT'}
+        </button>
+        <button
+          onClick={() => handleDrawImage(target, 'gemini')}
+          disabled={isDrawing}
+          className="px-2.5 py-1 text-xs font-medium rounded-lg bg-blue-50 hover:bg-blue-100 text-blue-700 border border-blue-200 transition disabled:opacity-50"
+          title="Нарисовать иллюстрацию через Gemini (Nano Banana) в фирменном стиле"
+        >
+          {isDrawing ? '…' : 'Gemini'}
+        </button>
+        {isDrawing && <span className="text-xs text-gray-400 animate-pulse">Рисуем — до минуты…</span>}
+      </div>
+    );
+  };
+
   // ── Block images (Успех / Бонусный факт) ──────────────────────────────────
   const [blockSearching, setBlockSearching] = useState<Record<string, boolean>>({});
   const [blockCandidates, setBlockCandidates] = useState<Record<string, ImageCandidateOption[]>>({});
@@ -378,6 +438,7 @@ export default function ContentView({ content, researchData, articleId, onUpdate
             {isSearching ? 'Поиск...' : 'Подобрать изображение'}
           </button>
         )}
+        {renderDrawButtons(blockKey)}
 
         {cands && cands.length > 0 && (
           <div className="mt-3 p-4 bg-amber-50 border border-amber-200 rounded-lg">
@@ -537,6 +598,7 @@ export default function ContentView({ content, researchData, articleId, onUpdate
                 >
                   <RefreshCw size={18} className={isSearching ? 'animate-spin' : ''} />
                 </button>
+                {renderDrawButtons(`section-${idx}`)}
               </div>
             ) : (
               <div className="my-4">
@@ -564,6 +626,7 @@ export default function ContentView({ content, researchData, articleId, onUpdate
                     {isSearching ? 'Поиск...' : 'Подобрать изображение'}
                   </button>
                 )}
+                {renderDrawButtons(`section-${idx}`)}
                 {/* Show visual suggestion hint if available */}
                 {matchingFact?.visualSuggestion && !section.imageUrl && (
                   <p className="text-xs text-gray-400 mt-2 italic">
